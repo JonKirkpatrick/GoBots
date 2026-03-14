@@ -9,7 +9,7 @@ import (
 // GameFactory is a function type that returns a new GameInstance
 type GameFactory func() GameInstance
 
-// Registry maps game names to their factory functions
+// registry maps game names to their factory functions
 var registry = map[string]GameFactory{
 	"connect4": func() GameInstance { return connect4.New() },
 }

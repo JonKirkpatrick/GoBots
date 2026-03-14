@@ -11,6 +11,7 @@ import (
 	"github.com/JonKirkpatrick/bbs/stadium"
 )
 
+// WelcomeBanner is the ASCII art displayed to bots upon connection, along with a brief introduction to the Build-a-Bot Stadium.
 const WelcomeBanner = `
 ######################################################################
 #__/\\\\\\\\\\\\\____/\\\\\\\\\\\\\_______/\\\\\\\\\\\_______________#
@@ -29,6 +30,9 @@ const WelcomeBanner = `
 // For questions/comments/improvements, please reach out!
 `
 
+// Main is the main entry point for the Build-a-Bot Stadium server.
+// It listens for incoming TCP connections from bots, manages their sessions,
+// and routes commands to the stadium manager for processing.
 func main() {
 	listener, err := net.Listen("tcp", ":8080")
 	if err != nil {
@@ -48,16 +52,25 @@ func main() {
 	}
 }
 
+// handleBot manages the lifecycle of a single bot connection, including registration, command processing, and cleanup on disconnect.
 func handleBot(conn net.Conn) {
-	defer conn.Close()
-
 	// 1. Initialize a new Session for this connection
 	sess := &stadium.Session{Conn: conn}
+
+	defer func() {
+		conn.Close()
+		if sess.IsRegistered {
+			stadium.DefaultManager.UnregisterSession(sess.SessionID)
+			if sess.CurrentArena != nil {
+				stadium.DefaultManager.HandlePlayerLeave(sess)
+			}
+		}
+	}()
 
 	// Display the banner
 	conn.Write([]byte(WelcomeBanner))
 
-	// A quick pause adds to the "connection" feel
+	// A quick pause adds to the "connection" feel.  I may remove it or make it configurable later.
 	time.Sleep(100 * time.Millisecond)
 	conn.Write([]byte("\nWelcome to the Build-a-Bot Stadium!"))
 	conn.Write([]byte("\nType HELP at any time for a command list.\n\n"))
@@ -141,8 +154,8 @@ func handleBot(conn net.Conn) {
 				// Notify everyone that the clock claimed a victim
 				sess.CurrentArena.NotifyAll("error", msg)
 
-				// Mark the arena as finished to prevent further moves
-				sess.CurrentArena.Status = "finished"
+				// Mark the arena as completed to prevent further moves
+				sess.CurrentArena.Status = "completed"
 
 				sess.SendJSON(stadium.Response{Status: "err", Type: "timeout", Payload: msg})
 				continue
@@ -163,6 +176,7 @@ func handleBot(conn net.Conn) {
 				state := sess.CurrentArena.Game.GetState()
 				sess.CurrentArena.NotifyAll("data", state)
 			}
+
 		case "LIST":
 			conn.Write([]byte(stadium.DefaultManager.ListMatches() + "\n"))
 
@@ -186,8 +200,19 @@ func handleBot(conn net.Conn) {
 				conn.Write([]byte("DATA: \n" + state + "\n"))
 			}
 
+		case "LEAVE":
+			if sess.CurrentArena == nil {
+				sess.SendJSON(stadium.Response{Status: "err", Type: "error", Payload: "Not currently in an arena"})
+				continue
+			}
+
+			stadium.DefaultManager.HandlePlayerLeave(sess)
+
+			sess.PlayerID = 0
+
+			sess.SendJSON(stadium.Response{Status: "ok", Type: "leave", Payload: "Left arena successfully"})
+
 		case "QUIT":
-			// Send a polite goodbye message before closing
 			conn.Write([]byte("BBS_STADIUM: Connection closed. Press ENTER to return to your prompt.\n"))
 			return // This triggers the defer conn.Close()
 
