@@ -279,6 +279,99 @@ func (m *Manager) HandlePlayerLeave(s *Session) {
 	}
 }
 
+// leaveArenaLocked removes a session from its current arena without closing the
+// TCP connection. The session remains registered and eligible to join another arena.
+// Called with m.mu held.
+func (m *Manager) leaveArenaLocked(s *Session) {
+	if s.CurrentArena == nil {
+		return
+	}
+	arena := s.CurrentArena
+
+	// Observer path — detach without affecting the match itself.
+	if arena.Player1 != s && arena.Player2 != s {
+		for i, obs := range arena.Observers {
+			if obs == s {
+				arena.Observers = append(arena.Observers[:i], arena.Observers[i+1:]...)
+				break
+			}
+		}
+		s.CurrentArena = nil
+		m.broadcastArenaListLocked()
+		return
+	}
+
+	// Waiting arena (at most one player occupying a slot) — detach cleanly so
+	// the slot can be claimed by another bot without finalizing the arena.
+	if arena.Status == "waiting" {
+		if arena.Player1 == s {
+			arena.Player1 = nil
+		} else {
+			arena.Player2 = nil
+		}
+		s.CurrentArena = nil
+		s.PlayerID = 0
+		s.SendJSON(Response{Status: "ok", Type: "leave", Payload: "Left arena successfully"})
+		m.broadcastArenaListLocked()
+		return
+	}
+
+	// Active arena — the leaving player forfeits; finalize and notify.
+	winnerPlayerID := 0
+	if arena.Player1 == s && arena.Player2 != nil {
+		winnerPlayerID = 2
+	}
+	if arena.Player2 == s && arena.Player1 != nil {
+		winnerPlayerID = 1
+	}
+	status := "aborted"
+	if winnerPlayerID != 0 {
+		status = "completed"
+	}
+	arena.NotifyAll("info", "Player "+s.BotName+" left the arena.")
+	_, _ = m.finalizeArenaLocked(arena, "player_left", status, winnerPlayerID, false)
+	// finalizeArenaLocked clears CurrentArena and PlayerID for both players.
+	m.broadcastArenaListLocked()
+}
+
+// LeaveArena removes a session from its current arena without ejecting it from
+// the stadium. The session stays registered and can join another arena.
+func (m *Manager) LeaveArena(s *Session) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.leaveArenaLocked(s)
+}
+
+// LeaveArenaForSession removes the session with the given ID from its current
+// arena without closing its TCP connection. Used by the admin dashboard.
+func (m *Manager) LeaveArenaForSession(sessionID int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	sess, exists := m.ActiveSessions[sessionID]
+	if !exists {
+		return errors.New("session not found")
+	}
+	if sess.CurrentArena == nil {
+		return errors.New("session is not currently in an arena")
+	}
+	m.leaveArenaLocked(sess)
+	return nil
+}
+
+// JoinArenaForSession joins the session with the given ID to an arena on behalf
+// of the admin — the internal equivalent of the JOIN TCP command.
+func (m *Manager) JoinArenaForSession(sessionID int, arenaID int, handicap int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	sess, exists := m.ActiveSessions[sessionID]
+	if !exists {
+		return errors.New("session not found")
+	}
+	return m.joinArenaLocked(arenaID, sess, handicap)
+}
+
 // activateArena sets the arena status to active,
 // initializes player time based on handicap settings,
 // and notifies both players that the game has started.
@@ -295,6 +388,11 @@ func (m *Manager) activateArena(a *Arena) {
 	msg := "Game Start! Opponent: " + a.Player1.BotName + " vs " + a.Player2.BotName
 	a.Player1.SendJSON(Response{"ok", "info", msg})
 	a.Player2.SendJSON(Response{"ok", "info", msg})
+
+	// Send the initial game state so bots receive the same "data" message
+	// they would get after any move — this lets player 1's bot know it's
+	// their turn immediately without waiting for a human trigger.
+	a.NotifyAll("data", a.Game.GetState())
 }
 
 func normalizeArenaHandicap(handicap int, allowHandicap bool) (int, error) {

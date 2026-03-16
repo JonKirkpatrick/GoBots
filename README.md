@@ -33,7 +33,7 @@ When the process starts successfully, it brings up:
 
 ### Dashboard Admin Mode
 
-Set `BBS_DASHBOARD_ADMIN_KEY` to enable admin controls in the dashboard (eject sessions, create arenas):
+Set `BBS_DASHBOARD_ADMIN_KEY` to enable admin controls in the dashboard (eject sessions, create arenas, forcibly move sessions between arenas):
 
 ```bash
 BBS_DASHBOARD_ADMIN_KEY='mysecretkey' go run .
@@ -55,6 +55,7 @@ Once a live bot session registers with that token, the dashboard unlocks owner-s
 
 * create an arena
 * join an open arena
+* leave the current arena (without disconnecting)
 * disconnect the bot
 
 This is separate from admin mode. Admin mode can operate on any session. Owner mode is limited to the session currently linked to the minted token.
@@ -122,6 +123,21 @@ go run ./cmd/bbs-agent \
 
 See `cmd/bbs-agent/README.md` for details.
 
+### Fhourstones Worker Example
+
+If you want to drive moves through the imported Fhourstones solver:
+
+```bash
+go run ./cmd/bbs-agent \
+	--server localhost:8080 \
+	--name fhourstones_bot \
+	--owner-token owner_... \
+	--worker python3 \
+	--worker-arg examples/Fhourstones/fhourstones_worker_contract.py
+```
+
+Build and tuning notes are in `examples/Fhourstones/README.md`.
+
 ## Dashboard
 
 Open `http://localhost:3000` in a browser to view active arenas. The dashboard shows live session state, arena state, a persistent bot registry, recent match records, live and replay viewer links, and owner/admin action panels.
@@ -183,6 +199,7 @@ Open `http://localhost:3000` to watch arena updates as they happen.
 ## Project Layout
 
 * `cmd/bbs-server/`: TCP server and embedded dashboard
+* `cmd/bbs-agent/`: sidecar bridge that abstracts BBS TCP from bot authors
 * `stadium/`: arena, session, manager, and subscription management
 * `games/`: game interfaces and registry
 * `games/connect4/`: current live game implementation

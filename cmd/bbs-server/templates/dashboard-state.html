@@ -87,10 +87,12 @@ REGISTER &lt;name&gt; "" "" connect4 owner_token={{.OwnerToken}}</pre>
                     </form>
 
                     {{if .OwnerSession.HasCurrentArena}}
-                        <article class="admin-action">
-                            <h3>Join Arena</h3>
-                            <p class="empty">This bot is already attached to arena #{{.OwnerSession.CurrentArenaID}}. Disconnect it before joining another arena.</p>
-                        </article>
+                        <form class="admin-action" hx-post="/owner/leave-arena" hx-target="#owner-result" hx-swap="innerHTML">
+                            <input type="hidden" name="owner_token" value="{{.OwnerToken}}" />
+                            <h3>Leave Arena</h3>
+                            <p>Bot is in arena #{{.OwnerSession.CurrentArenaID}}. Remove it from the arena while keeping the connection open.</p>
+                            <button type="submit">Leave Arena</button>
+                        </form>
                     {{else}}
                         <form class="admin-action" hx-post="/owner/join-arena" hx-target="#owner-result" hx-swap="innerHTML">
                             <input type="hidden" name="owner_token" value="{{.OwnerToken}}" />
@@ -380,6 +382,26 @@ REGISTER &lt;name&gt; "" "" connect4 owner_token={{.OwnerToken}}</pre>
                     <label>Reason (optional)</label>
                     <input type="text" name="reason" placeholder="Removed by admin" />
                     <button type="submit">Eject Bot</button>
+                </form>
+
+                <form class="admin-action" hx-post="/admin/leave-arena" hx-target="#admin-result" hx-swap="innerHTML">
+                    <input type="hidden" name="admin_key" value="{{.AdminKey}}" />
+                    <h3>Leave Arena (by session)</h3>
+                    <label>Session ID</label>
+                    <input type="number" min="1" name="session_id" required />
+                    <button type="submit">Remove from Arena</button>
+                </form>
+
+                <form class="admin-action" hx-post="/admin/join-arena" hx-target="#admin-result" hx-swap="innerHTML">
+                    <input type="hidden" name="admin_key" value="{{.AdminKey}}" />
+                    <h3>Join Arena (by session)</h3>
+                    <label>Session ID</label>
+                    <input type="number" min="1" name="session_id" required />
+                    <label>Arena ID</label>
+                    <input type="number" min="1" name="arena_id" required />
+                    <label>Handicap Percent</label>
+                    <input type="number" name="handicap_percent" value="0" required />
+                    <button type="submit">Join Arena</button>
                 </form>
 
                 <form class="admin-action" hx-post="/admin/create-arena" hx-target="#admin-result" hx-swap="innerHTML">

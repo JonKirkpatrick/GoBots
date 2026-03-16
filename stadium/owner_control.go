@@ -70,6 +70,23 @@ func (m *Manager) JoinArenaForOwner(ownerToken string, arenaID int, handicap int
 	return m.joinArenaLocked(arenaID, sess, handicap)
 }
 
+// LeaveArenaForOwner removes the owner's bot from its current arena without
+// closing the TCP connection — the bot stays registered and can rejoin.
+func (m *Manager) LeaveArenaForOwner(ownerToken string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	sess, ok := m.sessionByOwnerTokenLocked(ownerToken)
+	if !ok {
+		return errors.New("no active session is linked to this dashboard token")
+	}
+	if sess.CurrentArena == nil {
+		return errors.New("bot is not currently in an arena")
+	}
+	m.leaveArenaLocked(sess)
+	return nil
+}
+
 func (m *Manager) EjectOwnerSession(ownerToken, reason string) error {
 	m.mu.Lock()
 	sess, ok := m.sessionByOwnerTokenLocked(ownerToken)

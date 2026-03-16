@@ -17,18 +17,30 @@ type viewerPageData struct {
 	AdminKey string
 }
 
+// viewerParticipant carries player identity and stats for the viewer UI.
+type viewerParticipant struct {
+	PlayerID int    `json:"player_id"`
+	Name     string `json:"name"`
+	BotID    string `json:"bot_id,omitempty"`
+	Wins     int    `json:"wins"`
+	Losses   int    `json:"losses"`
+	Draws    int    `json:"draws"`
+}
+
 type viewerReplayResponse struct {
 	MatchID int                 `json:"match_id"`
 	Game    string              `json:"game"`
 	Spec    games.ViewerSpec    `json:"spec"`
 	Frames  []games.ViewerFrame `json:"frames"`
+	Players []viewerParticipant `json:"players"`
 }
 
 type viewerLiveEvent struct {
-	ArenaID int               `json:"arena_id"`
-	Status  string            `json:"status"`
-	Spec    games.ViewerSpec  `json:"spec"`
-	Frame   games.ViewerFrame `json:"frame"`
+	ArenaID int                 `json:"arena_id"`
+	Status  string              `json:"status"`
+	Spec    games.ViewerSpec    `json:"spec"`
+	Frame   games.ViewerFrame   `json:"frame"`
+	Players []viewerParticipant `json:"players"`
 }
 
 func handleViewerPage(w http.ResponseWriter, r *http.Request) {
@@ -70,6 +82,7 @@ func handleViewerReplayData(w http.ResponseWriter, r *http.Request) {
 		Game:    record.Game,
 		Spec:    spec,
 		Frames:  frames,
+		Players: buildReplayParticipants(record),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -254,7 +267,58 @@ func buildLiveViewerEvent(arenaID int) (viewerLiveEvent, bool, error) {
 		Status:  arenaState.Status,
 		Spec:    spec,
 		Frame:   frame,
+		Players: buildLiveParticipants(arenaState, spec),
 	}, true, nil
+}
+
+func buildLiveParticipants(arenaState stadium.ArenaViewerState, spec games.ViewerSpec) []viewerParticipant {
+	players := make([]viewerParticipant, 0, 2)
+	if arenaState.Player1.Name != "" {
+		players = append(players, viewerParticipant{
+			PlayerID: 1,
+			Name:     arenaState.Player1.Name,
+			BotID:    arenaState.Player1.BotID,
+			Wins:     arenaState.Player1.Wins,
+			Losses:   arenaState.Player1.Losses,
+			Draws:    arenaState.Player1.Draws,
+		})
+	}
+	if arenaState.Player2.Name != "" {
+		players = append(players, viewerParticipant{
+			PlayerID: 2,
+			Name:     arenaState.Player2.Name,
+			BotID:    arenaState.Player2.BotID,
+			Wins:     arenaState.Player2.Wins,
+			Losses:   arenaState.Player2.Losses,
+			Draws:    arenaState.Player2.Draws,
+		})
+	}
+	return players
+}
+
+func buildReplayParticipants(record stadium.MatchRecord) []viewerParticipant {
+	players := make([]viewerParticipant, 0, 2)
+	for _, p := range []struct {
+		id  int
+		par stadium.MatchParticipant
+	}{
+		{1, record.Player1},
+		{2, record.Player2},
+	} {
+		if p.par.BotName == "" && p.par.BotID == "" {
+			continue
+		}
+		w, l, d := stadium.DefaultManager.BotStatsForID(p.par.BotID)
+		players = append(players, viewerParticipant{
+			PlayerID: p.id,
+			Name:     p.par.BotName,
+			BotID:    p.par.BotID,
+			Wins:     w,
+			Losses:   l,
+			Draws:    d,
+		})
+	}
+	return players
 }
 
 func writeViewerSSEJSON(w http.ResponseWriter, eventName string, payload interface{}) error {

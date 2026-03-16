@@ -146,6 +146,89 @@
             margin: 0;
         }
 
+        /* ── Participant cards ─────────────────────────────────── */
+        .player-cards {
+            display: flex;
+            flex-direction: column;
+            gap: 0.45rem;
+        }
+
+        .player-card {
+            border: 2px solid var(--ink);
+            background: white;
+            padding: 0.5rem 0.65rem;
+            position: relative;
+            transition: box-shadow 0.25s, border-color 0.25s;
+        }
+
+        .player-card.active-turn {
+            border-color: var(--player-color);
+            box-shadow: 0 0 0 3px color-mix(in srgb, var(--player-color) 40%, transparent),
+                        4px 4px 0 rgba(20,33,61,0.18);
+            animation: card-pulse 1.4s ease-in-out infinite alternate;
+        }
+
+        @keyframes card-pulse {
+            from { box-shadow: 0 0 0 2px color-mix(in srgb, var(--player-color) 30%, transparent), 4px 4px 0 rgba(20,33,61,0.18); }
+            to   { box-shadow: 0 0 0 7px color-mix(in srgb, var(--player-color) 55%, transparent), 4px 4px 0 rgba(20,33,61,0.18); }
+        }
+
+        .turn-badge {
+            display: none;
+            position: absolute;
+            top: -1px;
+            right: -1px;
+            font-size: 0.66rem;
+            font-family: "IBM Plex Mono", monospace;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: white;
+            background: var(--player-color);
+            padding: 0.12rem 0.38rem;
+        }
+
+        .player-card.active-turn .turn-badge {
+            display: inline-block;
+        }
+
+        .player-card-header {
+            display: flex;
+            align-items: center;
+            gap: 0.42rem;
+            flex-wrap: wrap;
+        }
+
+        .player-color-swatch {
+            display: inline-block;
+            width: 13px;
+            height: 13px;
+            border-radius: 50%;
+            border: 1.5px solid rgba(0,0,0,0.25);
+            flex-shrink: 0;
+        }
+
+        .player-num {
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 0.76rem;
+            color: #555;
+        }
+
+        .player-card-name {
+            font-weight: 700;
+            font-size: 0.92rem;
+        }
+
+        .player-card-meta {
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 0.73rem;
+            color: #445;
+            margin-top: 0.22rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
         @media (max-width: 900px) {
             .viewer-grid {
                 grid-template-columns: 1fr;
@@ -177,6 +260,7 @@
             </div>
 
             <div class="controls">
+                <div id="player-cards" class="player-cards"></div>
                 <p id="mode-hint" class="hint"></p>
                 <div class="control-row">
                     <button id="step-back" type="button">Step -</button>
@@ -223,6 +307,59 @@
         let isPlaying = false;
         let playTimer = null;
         let autoFollowLive = true;
+        let knownPlayers = [];
+
+        // ── Participant card helpers ────────────────────────────
+        function escapeHtml(str) {
+            return String(str)
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;");
+        }
+
+        function buildPlayerCards(players) {
+            if (!players || players.length === 0) return;
+            knownPlayers = players;
+            const container = document.getElementById("player-cards");
+            if (!container) return;
+            container.innerHTML = "";
+            players.forEach(p => {
+                const color = (spec && spec.player_colors && spec.player_colors[String(p.player_id)]) || "#888";
+                const card = document.createElement("div");
+                card.className = "player-card";
+                card.id = "player-card-" + p.player_id;
+                card.style.setProperty("--player-color", color);
+
+                const botIdHtml = p.bot_id
+                    ? `<div class="player-card-meta" title="${escapeHtml(p.bot_id)}">ID: ${escapeHtml(p.bot_id)}</div>`
+                    : "";
+                const statsHtml = (p.wins !== undefined)
+                    ? `<div class="player-card-meta">${p.wins}W &nbsp;${p.losses}L &nbsp;${p.draws}D</div>`
+                    : "";
+
+                card.innerHTML = `
+                    <span class="turn-badge">&#x25B6; Turn</span>
+                    <div class="player-card-header">
+                        <span class="player-color-swatch" style="background:${color}"></span>
+                        <span class="player-num">P${p.player_id}</span>
+                        <span class="player-card-name">${escapeHtml(p.name || "Unknown")}</span>
+                    </div>
+                    ${botIdHtml}
+                    ${statsHtml}`;
+                container.appendChild(card);
+            });
+        }
+
+        function updateActiveTurn(turnPlayer) {
+            document.querySelectorAll(".player-card").forEach(card => {
+                card.classList.remove("active-turn");
+            });
+            if (turnPlayer > 0) {
+                const activeCard = document.getElementById("player-card-" + turnPlayer);
+                if (activeCard) activeCard.classList.add("active-turn");
+            }
+        }
 
         function setModeHint() {
             if (arenaId > 0) {
@@ -305,6 +442,8 @@
             }
             meta.textContent = lines.join("\n");
             rawState.textContent = frame.raw_state || "(raw state omitted)";
+
+            updateActiveTurn(frame.is_terminal ? 0 : frame.turn_player);
         }
 
         function renderConnect4(spec, frame) {
@@ -400,6 +539,7 @@
                 })
                 .then(data => {
                     spec = data.spec;
+                    buildPlayerCards(data.players);
                     currentIndex = 0;
                     setFrames(data.frames || []);
                 })
@@ -414,12 +554,16 @@
             es.addEventListener("frame", (evt) => {
                 const payload = JSON.parse(evt.data);
                 spec = payload.spec;
+                if (payload.players && payload.players.length > 0) {
+                    buildPlayerCards(payload.players);
+                }
                 upsertLiveFrame(payload.frame);
             });
 
             es.addEventListener("closed", (evt) => {
                 const payload = JSON.parse(evt.data || "{}");
                 stopPlayback();
+                updateActiveTurn(0);
                 meta.textContent = "Live stream ended: " + (payload.message || "arena closed");
                 es.close();
             });

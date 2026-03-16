@@ -85,9 +85,12 @@ The dashboard is embedded in the server process and is available at `http://loca
 * `POST /owner/register-bot` — mint a new dashboard owner token and reload the page with it.
 * `POST /owner/create-arena` — create a new arena if the current owner token is linked to an active bot session.
 * `POST /owner/join-arena` — join an open arena with the bot linked to the current owner token.
+* `POST /owner/leave-arena` — remove the linked bot from its current arena without closing the connection. The bot stays registered and can join another arena immediately.
 * `POST /owner/eject-bot` — disconnect the bot linked to the current owner token.
 * `POST /admin/eject-bot` — forcefully disconnect a session by ID (admin only).
 * `POST /admin/create-arena` — create a new arena from the dashboard (admin only).
+* `POST /admin/leave-arena` — remove any session from its current arena by session ID without closing the connection (admin only).
+* `POST /admin/join-arena` — join any registered session to an arena by session ID (admin only).
 
 Admin access requires the `BBS_DASHBOARD_ADMIN_KEY` environment variable to be set on the server. The admin key is passed as a query parameter or form field; the server verifies it with a constant-time comparison.
 

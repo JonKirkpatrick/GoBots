@@ -396,6 +396,28 @@ func handleOwnerJoinArena(w http.ResponseWriter, r *http.Request) {
 	renderActionResult(w, true, fmt.Sprintf("Requested join for arena %d.", arenaID))
 }
 
+func handleOwnerLeaveArena(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		renderActionResult(w, false, "Use POST for bot control actions.")
+		return
+	}
+
+	ownerToken, ok := requireOwnerToken(w, r)
+	if !ok {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	if err := stadium.DefaultManager.LeaveArenaForOwner(ownerToken); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		renderActionResult(w, false, err.Error())
+		return
+	}
+
+	renderActionResult(w, true, "Bot left the arena. It remains connected and can join another.")
+}
+
 func handleOwnerEjectBot(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -447,6 +469,78 @@ func handleAdminEjectBot(w http.ResponseWriter, r *http.Request) {
 	}
 
 	renderActionResult(w, true, fmt.Sprintf("Session %d ejected.", sessionID))
+}
+
+func handleAdminLeaveArena(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		renderActionResult(w, false, "Use POST for admin actions.")
+		return
+	}
+
+	_, ok := requireAdmin(w, r)
+	if !ok {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	sessionID, err := strconv.Atoi(strings.TrimSpace(r.FormValue("session_id")))
+	if err != nil || sessionID <= 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		renderActionResult(w, false, "Invalid session ID.")
+		return
+	}
+
+	if err := stadium.DefaultManager.LeaveArenaForSession(sessionID); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		renderActionResult(w, false, err.Error())
+		return
+	}
+
+	renderActionResult(w, true, fmt.Sprintf("Session %d left its arena. Connection remains open.", sessionID))
+}
+
+func handleAdminJoinArena(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		renderActionResult(w, false, "Use POST for admin actions.")
+		return
+	}
+
+	_, ok := requireAdmin(w, r)
+	if !ok {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	sessionID, err := strconv.Atoi(strings.TrimSpace(r.FormValue("session_id")))
+	if err != nil || sessionID <= 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		renderActionResult(w, false, "Invalid session ID.")
+		return
+	}
+
+	arenaID, err := strconv.Atoi(strings.TrimSpace(r.FormValue("arena_id")))
+	if err != nil || arenaID <= 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		renderActionResult(w, false, "Arena ID must be a positive integer.")
+		return
+	}
+
+	handicap, err := strconv.Atoi(strings.TrimSpace(r.FormValue("handicap_percent")))
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		renderActionResult(w, false, "Handicap must be an integer.")
+		return
+	}
+
+	if err := stadium.DefaultManager.JoinArenaForSession(sessionID, arenaID, handicap); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		renderActionResult(w, false, err.Error())
+		return
+	}
+
+	renderActionResult(w, true, fmt.Sprintf("Session %d joined arena %d.", sessionID, arenaID))
 }
 
 func handleAdminCreateArena(w http.ResponseWriter, r *http.Request) {
@@ -506,7 +600,10 @@ func startDashboard() {
 	mux.HandleFunc("/owner/register-bot", handleOwnerRegisterBot)
 	mux.HandleFunc("/owner/create-arena", handleOwnerCreateArena)
 	mux.HandleFunc("/owner/join-arena", handleOwnerJoinArena)
+	mux.HandleFunc("/owner/leave-arena", handleOwnerLeaveArena)
 	mux.HandleFunc("/owner/eject-bot", handleOwnerEjectBot)
+	mux.HandleFunc("/admin/leave-arena", handleAdminLeaveArena)
+	mux.HandleFunc("/admin/join-arena", handleAdminJoinArena)
 	mux.HandleFunc("/admin/eject-bot", handleAdminEjectBot)
 	mux.HandleFunc("/admin/create-arena", handleAdminCreateArena)
 	mux.HandleFunc("/", handleIndex)

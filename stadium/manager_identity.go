@@ -139,6 +139,16 @@ func (m *Manager) UnregisterSession(sessionID int) {
 	m.broadcastArenaListLocked()
 }
 
+// BotStatsForID returns the all-time W/L/D for a bot profile, used by the viewer.
+func (m *Manager) BotStatsForID(botID string) (wins, losses, draws int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if p, ok := m.BotProfiles[botID]; ok {
+		return p.Wins, p.Losses, p.Draws
+	}
+	return 0, 0, 0
+}
+
 func (m *Manager) EjectSession(sessionID int, reason string) error {
 	m.mu.Lock()
 	sess, exists := m.ActiveSessions[sessionID]

@@ -149,8 +149,8 @@ Responsibilities:
 * open an SSE stream at `/dashboard-sse`
 * mint owner tokens and expose owner-scoped bot controls from the dashboard UI
 * serve live/replay viewer routes under `/viewer`
-* serve owner POST endpoints at `/owner/register-bot`, `/owner/create-arena`, `/owner/join-arena`, and `/owner/eject-bot`
-* serve admin POST endpoints at `/admin/eject-bot` and `/admin/create-arena` (gated by `BBS_DASHBOARD_ADMIN_KEY`)
+* serve owner POST endpoints at `/owner/register-bot`, `/owner/create-arena`, `/owner/join-arena`, `/owner/leave-arena`, and `/owner/eject-bot`
+* serve admin POST endpoints at `/admin/eject-bot`, `/admin/create-arena`, `/admin/leave-arena`, and `/admin/join-arena` (all gated by `BBS_DASHBOARD_ADMIN_KEY`)
 * subscribe to `stadium.DefaultManager`
 * render each manager snapshot through the HTML templates
 
@@ -211,6 +211,12 @@ sequenceDiagram
     M->>A: attach linked session as player
     HTTP-->>Browser: success fragment
 
+    Browser->>HTTP: POST /owner/leave-arena
+    HTTP->>M: LeaveArenaForOwner(ownerToken)
+    M->>S: resolve linked session
+    M->>A: detach session, forfeit if active
+    HTTP-->>Browser: success fragment
+
     Browser->>HTTP: POST /owner/eject-bot
     HTTP->>M: EjectOwnerSession(ownerToken, reason)
     M->>S: resolve linked session
@@ -237,6 +243,9 @@ sequenceDiagram
     M->>A: activateArena()
     A-->>P1: info/game start
     A-->>P2: info/game start
+    A-->>P1: initial data/state
+    A-->>P2: initial data/state
+    Note over A: initial state broadcast lets P1 know to move immediately
     M-->>D: arena_list snapshot
 
     W->>TCP: WATCH <arena_id>
@@ -407,12 +416,17 @@ classDiagram
         +CreateArenaForOwner(ownerToken, GameInstance, args, timeLimit, allowHandicap)
         +JoinArena(id, Session, handicap)
         +JoinArenaForOwner(ownerToken, id, handicap)
+        +JoinArenaForSession(sessionID, id, handicap)
+        +LeaveArena(Session)
+        +LeaveArenaForOwner(ownerToken)
+        +LeaveArenaForSession(sessionID)
         +AddObserver(id, Session)
         +HandlePlayerLeave(Session)
         +RecordMove(arenaID, Session, move, elapsed)
         +FinalizeArena(arenaID, reason, winnerID, isDraw)
         +EjectSession(sessionID, reason)
         +EjectOwnerSession(ownerToken, reason)
+        +BotStatsForID(botID)
         +ListMatches()
         +Snapshot()
         +Subscribe()
