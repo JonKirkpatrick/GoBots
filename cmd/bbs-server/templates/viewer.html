@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>BBS Match Viewer</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #f3efe5;
+            --panel: #fffaf0;
+            --ink: #14213d;
+            --line: #d8d1bf;
+            --accent: #0b7285;
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            margin: 0;
+            font-family: "Space Grotesk", "Segoe UI", sans-serif;
+            color: var(--ink);
+            background:
+                radial-gradient(circle at 10% 10%, rgba(239, 125, 87, 0.12), transparent 30%),
+                radial-gradient(circle at 90% 20%, rgba(11, 114, 133, 0.12), transparent 35%),
+                var(--bg);
+            min-height: 100vh;
+        }
+
+        .shell {
+            width: min(1100px, 95vw);
+            margin: 1.4rem auto 2.2rem;
+            display: grid;
+            gap: 1rem;
+        }
+
+        .panel {
+            border: 2px solid var(--ink);
+            background: var(--panel);
+            padding: 0.9rem;
+            box-shadow: 6px 6px 0 rgba(20, 33, 61, 0.15);
+        }
+
+        .top-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 0.8rem;
+            flex-wrap: wrap;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: clamp(1.2rem, 2.8vw, 1.8rem);
+        }
+
+        .subtitle {
+            margin: 0.3rem 0 0;
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 0.87rem;
+            color: #334;
+        }
+
+        .back-link {
+            text-decoration: none;
+            color: white;
+            background: var(--accent);
+            border: 1px solid var(--accent);
+            padding: 0.4rem 0.55rem;
+            font-size: 0.9rem;
+        }
+
+        .viewer-grid {
+            display: grid;
+            grid-template-columns: 1fr 320px;
+            gap: 1rem;
+        }
+
+        .canvas-wrap {
+            border: 1px solid var(--line);
+            background: white;
+            padding: 0.5rem;
+            overflow: auto;
+        }
+
+        canvas {
+            display: block;
+            margin: 0 auto;
+            background: #fdfdfd;
+        }
+
+        .controls {
+            display: grid;
+            gap: 0.55rem;
+        }
+
+        .control-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.45rem;
+            align-items: center;
+        }
+
+        .controls button,
+        .controls select,
+        .controls input[type="range"] {
+            font: inherit;
+        }
+
+        .controls button {
+            border: 1px solid var(--ink);
+            background: white;
+            padding: 0.35rem 0.5rem;
+            cursor: pointer;
+        }
+
+        .meta {
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 0.82rem;
+            border: 1px solid var(--line);
+            background: white;
+            padding: 0.55rem;
+            white-space: pre-wrap;
+        }
+
+        details {
+            margin-top: 0.65rem;
+        }
+
+        pre {
+            margin: 0.5rem 0 0;
+            max-height: 260px;
+            overflow: auto;
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 0.78rem;
+            background: #182430;
+            color: #b8f3d0;
+            padding: 0.55rem;
+        }
+
+        .hint {
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 0.82rem;
+            color: #334;
+            margin: 0;
+        }
+
+        @media (max-width: 900px) {
+            .viewer-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="shell">
+        <section class="panel">
+            <div class="top-row">
+                <div>
+                    <h1>Match Viewer</h1>
+                    <p class="subtitle">Canvas replay/live view powered by game-provided frame data</p>
+                </div>
+                <a class="back-link" href="/{{if .AdminKey}}?admin_key={{.AdminKey | urlquery}}{{end}}">Back to Dashboard</a>
+            </div>
+        </section>
+
+        <section class="panel viewer-grid">
+            <div>
+                <div class="canvas-wrap">
+                    <canvas id="viewer-canvas" width="700" height="560"></canvas>
+                </div>
+                <details>
+                    <summary>Raw Frame State</summary>
+                    <pre id="raw-state">(waiting for first frame)</pre>
+                </details>
+            </div>
+
+            <div class="controls">
+                <p id="mode-hint" class="hint"></p>
+                <div class="control-row">
+                    <button id="step-back" type="button">Step -</button>
+                    <button id="play-toggle" type="button">Play</button>
+                    <button id="step-forward" type="button">Step +</button>
+                </div>
+                <div class="control-row">
+                    <label for="speed">Speed:</label>
+                    <select id="speed">
+                        <option value="250">4x</option>
+                        <option value="500">2x</option>
+                        <option value="1000" selected>1x</option>
+                        <option value="1500">0.67x</option>
+                    </select>
+                </div>
+                <div class="control-row">
+                    <input id="scrub" type="range" min="0" max="0" value="0" style="width: 100%;" />
+                </div>
+                <div id="meta" class="meta">No frames loaded yet.</div>
+            </div>
+        </section>
+    </div>
+
+    <div id="page-data" data-arena-id="{{.ArenaID}}" data-match-id="{{.MatchID}}" hidden></div>
+
+    <script>
+        const pageData = document.getElementById("page-data").dataset;
+        const arenaId = parseInt(pageData.arenaId, 10);
+        const matchId = parseInt(pageData.matchId, 10);
+        const canvas = document.getElementById("viewer-canvas");
+        const ctx = canvas.getContext("2d");
+        const rawState = document.getElementById("raw-state");
+        const meta = document.getElementById("meta");
+        const modeHint = document.getElementById("mode-hint");
+        const scrub = document.getElementById("scrub");
+        const playToggle = document.getElementById("play-toggle");
+        const stepBack = document.getElementById("step-back");
+        const stepForward = document.getElementById("step-forward");
+        const speedSelect = document.getElementById("speed");
+
+        let spec = null;
+        let frames = [];
+        let currentIndex = 0;
+        let isPlaying = false;
+        let playTimer = null;
+        let autoFollowLive = true;
+
+        function setModeHint() {
+            if (arenaId > 0) {
+                modeHint.textContent = "Live mode: Arena #" + arenaId;
+            } else if (matchId > 0) {
+                modeHint.textContent = "Replay mode: Match #" + matchId;
+            } else {
+                modeHint.textContent = "No arena_id or match_id supplied. Open this page from the dashboard links.";
+            }
+        }
+
+        function setFrames(nextFrames) {
+            frames = nextFrames || [];
+            if (currentIndex >= frames.length) {
+                currentIndex = Math.max(0, frames.length - 1);
+            }
+            updateControls();
+            renderCurrentFrame();
+        }
+
+        function upsertLiveFrame(frame) {
+            if (!frame) {
+                return;
+            }
+            const idx = frames.findIndex(f => f.move_index === frame.move_index);
+            if (idx >= 0) {
+                frames[idx] = frame;
+            } else {
+                frames.push(frame);
+                frames.sort((a, b) => a.move_index - b.move_index);
+            }
+
+            if (autoFollowLive || currentIndex >= Math.max(0, frames.length - 2)) {
+                currentIndex = Math.max(0, frames.length - 1);
+            }
+
+            updateControls();
+            renderCurrentFrame();
+        }
+
+        function updateControls() {
+            scrub.max = Math.max(0, frames.length - 1);
+            scrub.value = Math.min(currentIndex, frames.length - 1);
+            stepBack.disabled = frames.length === 0 || currentIndex <= 0;
+            stepForward.disabled = frames.length === 0 || currentIndex >= frames.length - 1;
+            playToggle.disabled = frames.length === 0;
+            playToggle.textContent = isPlaying ? "Pause" : "Play";
+        }
+
+        function renderCurrentFrame() {
+            if (!spec || frames.length === 0) {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = "#1f2937";
+                ctx.font = "16px IBM Plex Mono";
+                ctx.fillText("Waiting for frame data...", 20, 40);
+                rawState.textContent = "(waiting for first frame)";
+                meta.textContent = "No frames loaded yet.";
+                return;
+            }
+
+            const frame = frames[currentIndex];
+            if (spec.kind === "connect4-grid") {
+                renderConnect4(spec, frame);
+            } else {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = "#1f2937";
+                ctx.font = "16px IBM Plex Mono";
+                ctx.fillText("Renderer for kind '" + spec.kind + "' is not implemented yet.", 20, 40);
+            }
+
+            const lines = [];
+            lines.push("game=" + spec.game + " kind=" + spec.kind);
+            lines.push("frame=" + frame.move_index + " of " + Math.max(0, frames.length - 1));
+            lines.push("turn_player=" + frame.turn_player);
+            if (frame.timestamp) {
+                lines.push("timestamp=" + frame.timestamp);
+            }
+            if (frame.is_terminal) {
+                lines.push("terminal=true winner=" + (frame.winner || "unknown"));
+            }
+            meta.textContent = lines.join("\n");
+            rawState.textContent = frame.raw_state || "(raw state omitted)";
+        }
+
+        function renderConnect4(spec, frame) {
+            const rows = Math.max(1, spec.rows || 6);
+            const cols = Math.max(1, spec.cols || 7);
+            const cell = Math.max(36, Math.floor(700 / Math.max(rows, cols + 1)));
+            const pad = 18;
+            const boardW = cols * cell;
+            const boardH = rows * cell;
+            canvas.width = boardW + pad * 2;
+            canvas.height = boardH + pad * 2 + 4;
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            ctx.fillStyle = "#1d4ed8";
+            ctx.fillRect(pad, pad, boardW, boardH);
+
+            for (let r = 0; r < rows; r++) {
+                for (let c = 0; c < cols; c++) {
+                    const x = pad + c * cell + cell / 2;
+                    const y = pad + r * cell + cell / 2;
+                    ctx.beginPath();
+                    ctx.arc(x, y, cell * 0.35, 0, Math.PI * 2);
+                    ctx.fillStyle = "#f8fafc";
+                    ctx.fill();
+                }
+            }
+
+            const color1 = (spec.player_colors && spec.player_colors["1"]) || "#ef476f";
+            const color2 = (spec.player_colors && spec.player_colors["2"]) || "#ffd166";
+
+            (frame.tokens || []).forEach(token => {
+                const x = pad + token.col * cell + cell / 2;
+                const y = pad + token.row * cell + cell / 2;
+                ctx.beginPath();
+                ctx.arc(x, y, cell * 0.35, 0, Math.PI * 2);
+                ctx.fillStyle = token.player === 1 ? color1 : color2;
+                ctx.fill();
+                ctx.strokeStyle = "#1f2937";
+                ctx.stroke();
+            });
+        }
+
+        function step(delta) {
+            if (frames.length === 0) {
+                return;
+            }
+            currentIndex = Math.min(Math.max(currentIndex + delta, 0), frames.length - 1);
+            autoFollowLive = currentIndex >= frames.length - 1;
+            updateControls();
+            renderCurrentFrame();
+        }
+
+        function stopPlayback() {
+            isPlaying = false;
+            if (playTimer) {
+                clearInterval(playTimer);
+                playTimer = null;
+            }
+            updateControls();
+        }
+
+        function startPlayback() {
+            stopPlayback();
+            isPlaying = true;
+            const intervalMs = Number(speedSelect.value) || 1000;
+            playTimer = setInterval(() => {
+                if (frames.length === 0) {
+                    return;
+                }
+                if (currentIndex < frames.length - 1) {
+                    currentIndex += 1;
+                    updateControls();
+                    renderCurrentFrame();
+                    return;
+                }
+                if (arenaId > 0) {
+                    autoFollowLive = true;
+                    return;
+                }
+                stopPlayback();
+            }, intervalMs);
+            updateControls();
+        }
+
+        function loadReplay() {
+            fetch("/viewer/replay-data?match_id=" + encodeURIComponent(matchId))
+                .then(resp => {
+                    if (!resp.ok) {
+                        throw new Error("Replay request failed: " + resp.status);
+                    }
+                    return resp.json();
+                })
+                .then(data => {
+                    spec = data.spec;
+                    currentIndex = 0;
+                    setFrames(data.frames || []);
+                })
+                .catch(err => {
+                    meta.textContent = "Failed to load replay: " + err.message;
+                });
+        }
+
+        function startLive() {
+            const es = new EventSource("/viewer/live-sse?arena_id=" + encodeURIComponent(arenaId));
+
+            es.addEventListener("frame", (evt) => {
+                const payload = JSON.parse(evt.data);
+                spec = payload.spec;
+                upsertLiveFrame(payload.frame);
+            });
+
+            es.addEventListener("closed", (evt) => {
+                const payload = JSON.parse(evt.data || "{}");
+                stopPlayback();
+                meta.textContent = "Live stream ended: " + (payload.message || "arena closed");
+                es.close();
+            });
+
+            es.addEventListener("error", (evt) => {
+                try {
+                    const payload = JSON.parse(evt.data || "{}");
+                    meta.textContent = "Live stream error: " + (payload.error || "unknown error");
+                } catch (_) {
+                    meta.textContent = "Live stream disconnected.";
+                }
+            });
+        }
+
+        playToggle.addEventListener("click", () => {
+            if (isPlaying) {
+                stopPlayback();
+            } else {
+                startPlayback();
+            }
+        });
+
+        stepBack.addEventListener("click", () => step(-1));
+        stepForward.addEventListener("click", () => step(1));
+
+        scrub.addEventListener("input", () => {
+            currentIndex = Number(scrub.value) || 0;
+            autoFollowLive = currentIndex >= Math.max(0, frames.length - 1);
+            updateControls();
+            renderCurrentFrame();
+        });
+
+        speedSelect.addEventListener("change", () => {
+            if (isPlaying) {
+                startPlayback();
+            }
+        });
+
+        setModeHint();
+        updateControls();
+        renderCurrentFrame();
+
+        if (arenaId > 0) {
+            startLive();
+        } else if (matchId > 0) {
+            loadReplay();
+        }
+    </script>
+</body>
+</html>

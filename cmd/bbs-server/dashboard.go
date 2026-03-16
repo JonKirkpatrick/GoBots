@@ -5,7 +5,9 @@ import (
 	"crypto/subtle"
 	"fmt"
 	"html/template"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -24,6 +26,8 @@ type dashboardIndexData struct {
 	AdminConfigured bool
 	IsAdmin         bool
 	AdminKey        string
+	OwnerToken      string
+	SSEQuery        string
 }
 
 type dashboardStateView struct {
@@ -31,12 +35,49 @@ type dashboardStateView struct {
 	IsAdmin         bool
 	AdminConfigured bool
 	AdminKey        string
+	OwnerToken      string
+	OwnerSession    stadium.SessionSnapshot
+	OwnerConnected  bool
+	BotHost         string
+	BotPort         string
+	BotEndpoint     string
 }
 
 func initDashboard() {
 	files, _ := filepath.Glob("templates/*.html")
 	fmt.Printf("Found %d dashboard templates: %v\n", len(files), files)
-	dashTemplates = template.Must(template.ParseGlob("templates/*.html"))
+	funcMap := template.FuncMap{
+		"fmtTime":    formatDashboardTime,
+		"fmtSeconds": formatMillisecondsAsSeconds,
+	}
+	dashTemplates = template.Must(template.New("").Funcs(funcMap).ParseGlob("templates/*.html"))
+}
+
+func formatDashboardTime(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+
+	ts, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return raw
+	}
+
+	return ts.UTC().Truncate(time.Second).Format("2006-01-02 15:04:05 UTC")
+}
+
+func formatMillisecondsAsSeconds(ms int64) string {
+	if ms <= 0 {
+		return "0s"
+	}
+
+	seconds := (time.Duration(ms) * time.Millisecond).Round(time.Second) / time.Second
+	if seconds < 1 {
+		seconds = 1
+	}
+
+	return fmt.Sprintf("%ds", seconds)
 }
 
 func dashboardAdminKey() string {
@@ -73,12 +114,87 @@ func parseGameArgs(raw string) []string {
 	return strings.Fields(raw)
 }
 
-func renderAdminResult(w http.ResponseWriter, ok bool, message string) {
+func renderActionResult(w http.ResponseWriter, ok bool, message string) {
 	class := "admin-result error"
 	if ok {
 		class = "admin-result success"
 	}
 	fmt.Fprintf(w, `<div class="%s">%s</div>`, class, template.HTMLEscapeString(message))
+}
+
+func ownerTokenFromRequest(r *http.Request) string {
+	ownerToken := strings.TrimSpace(r.FormValue("owner_token"))
+	if ownerToken == "" {
+		ownerToken = strings.TrimSpace(r.URL.Query().Get("owner_token"))
+	}
+	return ownerToken
+}
+
+func dashboardSSEQuery(adminKey, ownerToken string) string {
+	values := url.Values{}
+	if strings.TrimSpace(adminKey) != "" {
+		values.Set("admin_key", strings.TrimSpace(adminKey))
+	}
+	if strings.TrimSpace(ownerToken) != "" {
+		values.Set("owner_token", strings.TrimSpace(ownerToken))
+	}
+	encoded := values.Encode()
+	if encoded == "" {
+		return ""
+	}
+	return "?" + encoded
+}
+
+func requestHostOnly(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "localhost"
+	}
+
+	if host, port, err := net.SplitHostPort(raw); err == nil {
+		if host != "" && port != "" {
+			return host
+		}
+	}
+
+	if strings.Count(raw, ":") == 1 {
+		parts := strings.SplitN(raw, ":", 2)
+		if parts[0] != "" {
+			return parts[0]
+		}
+	}
+
+	return raw
+}
+
+func dashboardBotHost(r *http.Request) string {
+	return requestHostOnly(r.Host)
+}
+
+func dashboardBotEndpoint(r *http.Request) string {
+	return net.JoinHostPort(dashboardBotHost(r), botServerPort)
+}
+
+func buildDashboardStateView(r *http.Request, snapshot stadium.ManagerSnapshot, adminKey, ownerToken string) dashboardStateView {
+	view := dashboardStateView{
+		Snapshot:        snapshot,
+		IsAdmin:         isAdminAuthorized(adminKey),
+		AdminConfigured: dashboardAdminKey() != "",
+		AdminKey:        adminKey,
+		OwnerToken:      ownerToken,
+		BotHost:         dashboardBotHost(r),
+		BotPort:         botServerPort,
+		BotEndpoint:     dashboardBotEndpoint(r),
+	}
+
+	if ownerToken != "" {
+		if session, ok := stadium.DefaultManager.OwnerSessionSnapshot(ownerToken); ok {
+			view.OwnerSession = session
+			view.OwnerConnected = true
+		}
+	}
+
+	return view
 }
 
 func writeDashboardSSE(w http.ResponseWriter, view dashboardStateView) error {
@@ -109,17 +225,12 @@ func handleDashboardSSE(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 
 	adminKey := r.URL.Query().Get("admin_key")
-	isAdmin := isAdminAuthorized(adminKey)
+	ownerToken := ownerTokenFromRequest(r)
 
 	sub := stadium.DefaultManager.Subscribe()
 	defer stadium.DefaultManager.Unsubscribe(sub)
 
-	view := dashboardStateView{
-		Snapshot:        stadium.DefaultManager.Snapshot(),
-		IsAdmin:         isAdmin,
-		AdminConfigured: dashboardAdminKey() != "",
-		AdminKey:        adminKey,
-	}
+	view := buildDashboardStateView(r, stadium.DefaultManager.Snapshot(), adminKey, ownerToken)
 
 	if err := writeDashboardSSE(w, view); err != nil {
 		return
@@ -134,7 +245,7 @@ func handleDashboardSSE(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			view.Snapshot = stadium.DefaultManager.Snapshot()
+			view = buildDashboardStateView(r, stadium.DefaultManager.Snapshot(), adminKey, ownerToken)
 
 			if err := writeDashboardSSE(w, view); err != nil {
 				return
@@ -145,10 +256,13 @@ func handleDashboardSSE(w http.ResponseWriter, r *http.Request) {
 
 func handleIndex(w http.ResponseWriter, r *http.Request) {
 	adminKey := r.URL.Query().Get("admin_key")
+	ownerToken := ownerTokenFromRequest(r)
 	data := dashboardIndexData{
 		AdminConfigured: dashboardAdminKey() != "",
 		IsAdmin:         isAdminAuthorized(adminKey),
 		AdminKey:        adminKey,
+		OwnerToken:      ownerToken,
+		SSEQuery:        dashboardSSEQuery(adminKey, ownerToken),
 	}
 	dashTemplates.ExecuteTemplate(w, "index.html", data)
 }
@@ -160,17 +274,155 @@ func requireAdmin(w http.ResponseWriter, r *http.Request) (string, bool) {
 	}
 
 	if !isAdminAuthorized(adminKey) {
-		renderAdminResult(w, false, "Admin authorization failed. Set BBS_DASHBOARD_ADMIN_KEY and provide a valid key.")
+		renderActionResult(w, false, "Admin authorization failed. Set BBS_DASHBOARD_ADMIN_KEY and provide a valid key.")
 		return "", false
 	}
 
 	return adminKey, true
 }
 
+func requireOwnerToken(w http.ResponseWriter, r *http.Request) (string, bool) {
+	ownerToken := ownerTokenFromRequest(r)
+	if ownerToken == "" {
+		renderActionResult(w, false, "No dashboard control token provided. Use Register Bot first.")
+		return "", false
+	}
+
+	return ownerToken, true
+}
+
+func handleOwnerRegisterBot(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		renderActionResult(w, false, "Use POST to issue a bot control token.")
+		return
+	}
+
+	ownerToken, err := stadium.NewOwnerToken()
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		renderActionResult(w, false, "Failed to generate a bot control token.")
+		return
+	}
+
+	http.Redirect(w, r, "/"+dashboardSSEQuery(strings.TrimSpace(r.FormValue("admin_key")), ownerToken), http.StatusSeeOther)
+}
+
+func handleOwnerCreateArena(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		renderActionResult(w, false, "Use POST for bot control actions.")
+		return
+	}
+
+	ownerToken, ok := requireOwnerToken(w, r)
+	if !ok {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	gameType := strings.TrimSpace(r.FormValue("game"))
+	if gameType == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		renderActionResult(w, false, "Game type is required.")
+		return
+	}
+
+	timeLimitMS, err := strconv.Atoi(strings.TrimSpace(r.FormValue("time_ms")))
+	if err != nil || timeLimitMS <= 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		renderActionResult(w, false, "Time limit must be a positive integer in milliseconds.")
+		return
+	}
+
+	allowHandicap, err := strconv.ParseBool(strings.TrimSpace(r.FormValue("allow_handicap")))
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		renderActionResult(w, false, "allow_handicap must be true or false.")
+		return
+	}
+
+	args := parseGameArgs(r.FormValue("game_args"))
+	game, err := games.GetGame(gameType, args)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		renderActionResult(w, false, err.Error())
+		return
+	}
+
+	arenaID, err := stadium.DefaultManager.CreateArenaForOwner(ownerToken, game, args, time.Duration(timeLimitMS)*time.Millisecond, allowHandicap)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		renderActionResult(w, false, err.Error())
+		return
+	}
+
+	renderActionResult(w, true, fmt.Sprintf("Created arena %d (%s).", arenaID, gameType))
+}
+
+func handleOwnerJoinArena(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		renderActionResult(w, false, "Use POST for bot control actions.")
+		return
+	}
+
+	ownerToken, ok := requireOwnerToken(w, r)
+	if !ok {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	arenaID, err := strconv.Atoi(strings.TrimSpace(r.FormValue("arena_id")))
+	if err != nil || arenaID <= 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		renderActionResult(w, false, "Arena ID must be a positive integer.")
+		return
+	}
+
+	handicap, err := strconv.Atoi(strings.TrimSpace(r.FormValue("handicap_percent")))
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		renderActionResult(w, false, "Handicap must be an integer.")
+		return
+	}
+
+	if err := stadium.DefaultManager.JoinArenaForOwner(ownerToken, arenaID, handicap); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		renderActionResult(w, false, err.Error())
+		return
+	}
+
+	renderActionResult(w, true, fmt.Sprintf("Requested join for arena %d.", arenaID))
+}
+
+func handleOwnerEjectBot(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		renderActionResult(w, false, "Use POST for bot control actions.")
+		return
+	}
+
+	ownerToken, ok := requireOwnerToken(w, r)
+	if !ok {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	reason := strings.TrimSpace(r.FormValue("reason"))
+	if err := stadium.DefaultManager.EjectOwnerSession(ownerToken, reason); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		renderActionResult(w, false, err.Error())
+		return
+	}
+
+	renderActionResult(w, true, "Owned bot disconnected.")
+}
+
 func handleAdminEjectBot(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
-		renderAdminResult(w, false, "Use POST for admin actions.")
+		renderActionResult(w, false, "Use POST for admin actions.")
 		return
 	}
 
@@ -183,24 +435,24 @@ func handleAdminEjectBot(w http.ResponseWriter, r *http.Request) {
 	sessionID, err := strconv.Atoi(strings.TrimSpace(r.FormValue("session_id")))
 	if err != nil || sessionID <= 0 {
 		w.WriteHeader(http.StatusBadRequest)
-		renderAdminResult(w, false, "Invalid session ID.")
+		renderActionResult(w, false, "Invalid session ID.")
 		return
 	}
 
 	reason := strings.TrimSpace(r.FormValue("reason"))
 	if err := stadium.DefaultManager.EjectSession(sessionID, reason); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
-		renderAdminResult(w, false, err.Error())
+		renderActionResult(w, false, err.Error())
 		return
 	}
 
-	renderAdminResult(w, true, fmt.Sprintf("Session %d ejected.", sessionID))
+	renderActionResult(w, true, fmt.Sprintf("Session %d ejected.", sessionID))
 }
 
 func handleAdminCreateArena(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
-		renderAdminResult(w, false, "Use POST for admin actions.")
+		renderActionResult(w, false, "Use POST for admin actions.")
 		return
 	}
 
@@ -213,21 +465,21 @@ func handleAdminCreateArena(w http.ResponseWriter, r *http.Request) {
 	gameType := strings.TrimSpace(r.FormValue("game"))
 	if gameType == "" {
 		w.WriteHeader(http.StatusBadRequest)
-		renderAdminResult(w, false, "Game type is required.")
+		renderActionResult(w, false, "Game type is required.")
 		return
 	}
 
 	timeLimitMS, err := strconv.Atoi(strings.TrimSpace(r.FormValue("time_ms")))
 	if err != nil || timeLimitMS <= 0 {
 		w.WriteHeader(http.StatusBadRequest)
-		renderAdminResult(w, false, "Time limit must be a positive integer in milliseconds.")
+		renderActionResult(w, false, "Time limit must be a positive integer in milliseconds.")
 		return
 	}
 
 	allowHandicap, err := strconv.ParseBool(strings.TrimSpace(r.FormValue("allow_handicap")))
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
-		renderAdminResult(w, false, "allow_handicap must be true or false.")
+		renderActionResult(w, false, "allow_handicap must be true or false.")
 		return
 	}
 
@@ -235,12 +487,12 @@ func handleAdminCreateArena(w http.ResponseWriter, r *http.Request) {
 	game, err := games.GetGame(gameType, args)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
-		renderAdminResult(w, false, err.Error())
+		renderActionResult(w, false, err.Error())
 		return
 	}
 
-	arenaID := stadium.DefaultManager.CreateArena(game, time.Duration(timeLimitMS)*time.Millisecond, allowHandicap)
-	renderAdminResult(w, true, fmt.Sprintf("Created arena %d (%s).", arenaID, gameType))
+	arenaID := stadium.DefaultManager.CreateArena(game, args, time.Duration(timeLimitMS)*time.Millisecond, allowHandicap)
+	renderActionResult(w, true, fmt.Sprintf("Created arena %d (%s).", arenaID, gameType))
 }
 
 func startDashboard() {
@@ -248,12 +500,19 @@ func startDashboard() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/dashboard-sse", handleDashboardSSE)
+	mux.HandleFunc("/viewer", handleViewerPage)
+	mux.HandleFunc("/viewer/live-sse", handleViewerLiveSSE)
+	mux.HandleFunc("/viewer/replay-data", handleViewerReplayData)
+	mux.HandleFunc("/owner/register-bot", handleOwnerRegisterBot)
+	mux.HandleFunc("/owner/create-arena", handleOwnerCreateArena)
+	mux.HandleFunc("/owner/join-arena", handleOwnerJoinArena)
+	mux.HandleFunc("/owner/eject-bot", handleOwnerEjectBot)
 	mux.HandleFunc("/admin/eject-bot", handleAdminEjectBot)
 	mux.HandleFunc("/admin/create-arena", handleAdminCreateArena)
 	mux.HandleFunc("/", handleIndex)
 
-	fmt.Println("Dashboard running at http://localhost:3000")
-	if err := http.ListenAndServe(":3000", mux); err != nil {
+	fmt.Printf("Dashboard running at http://localhost:%s\n", dashboardServerPort)
+	if err := http.ListenAndServe(":"+dashboardServerPort, mux); err != nil {
 		fmt.Printf("Dashboard server error: %s\n", err)
 	}
 }

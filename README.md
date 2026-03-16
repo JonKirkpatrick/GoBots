@@ -1,6 +1,6 @@
 # Build-a-Bot Stadium
 
-Build-a-Bot Stadium is a Go server for running perfect-information bot matches, tracking active arenas, and exposing a lightweight browser dashboard for spectators.
+Build-a-Bot Stadium is a Go server for running perfect-information bot matches, tracking active arenas, and exposing a browser dashboard for spectators, admins, and bot owners.
 
 The project currently runs as a single process with two public surfaces:
 
@@ -41,6 +41,24 @@ BBS_DASHBOARD_ADMIN_KEY='mysecretkey' go run .
 
 Then open `http://localhost:3000/?admin_key=mysecretkey`. Use single quotes around keys that contain shell-special characters.
 
+### Dashboard Bot Control Mode
+
+The dashboard also exposes a public Register Bot flow. Clicking Register Bot mints an owner token for the current browser view.
+
+The control panel then shows:
+
+* the TCP host/IP the bot should connect to
+* the bot TCP port
+* the owner token to include in `REGISTER`
+
+Once a live bot session registers with that token, the dashboard unlocks owner-scoped actions for that bot:
+
+* create an arena
+* join an open arena
+* disconnect the bot
+
+This is separate from admin mode. Admin mode can operate on any session. Owner mode is limited to the session currently linked to the minted token.
+
 ## Build
 
 From the repository root:
@@ -56,7 +74,7 @@ Bots connect over raw TCP and exchange newline-delimited commands and JSON respo
 Typical flow:
 
 1. Connect to `localhost:8080`
-2. Send `REGISTER <name> <bot_id_or_""> <bot_secret_or_""> [cap1,cap2,...]`
+2. Send `REGISTER <name> <bot_id_or_""> <bot_secret_or_""> [cap1,cap2,...] [owner_token=<token>]`
 3. Create, join, watch, or play in arenas
 
 If a bot has no identity yet, it sends `""` for both `bot_id` and `bot_secret` to request a new identity pair.
@@ -64,11 +82,11 @@ If a bot has no identity yet, it sends `""` for both `bot_id` and `bot_secret` t
 Common commands:
 
 * `HELP`
-* `REGISTER <name> <bot_id_or_""> <bot_secret_or_""> [cap1,cap2,...]`
+* `REGISTER <name> <bot_id_or_""> <bot_secret_or_""> [cap1,cap2,...] [owner_token=<token>]`
 * `WHOAMI`
 * `UPDATE <field> <value>`
 * `CREATE <type> <time_ms> <handicap_bool> [args...]`
-* `JOIN <arena_id> <handicap>`
+* `JOIN <arena_id> <handicap_percent>`
 * `LIST`
 * `WATCH <arena_id>`
 * `MOVE <move>`
@@ -79,9 +97,16 @@ For the full wire protocol, see `PROTOCOL.md`.
 
 ## Dashboard
 
-Open `http://localhost:3000` in a browser to view active arenas. The dashboard shows live session state, arena state (with move counts and timestamps), a persistent bot registry (win/loss/draw history per bot identity), and recent match records with full move sequences.
+Open `http://localhost:3000` in a browser to view active arenas. The dashboard shows live session state, arena state, a persistent bot registry, recent match records, live and replay viewer links, and owner/admin action panels.
 
 The dashboard receives pushed updates over Server-Sent Events from `/dashboard-sse`. It is not a separate TCP client and does not register with the stadium server.
+
+The match viewer is served at `/viewer`:
+
+* `GET /viewer?arena_id=<id>` opens a live arena viewer
+* `GET /viewer?match_id=<id>` opens a replay viewer for an archived match
+
+The replay viewer loads frame data from `/viewer/replay-data`, and the live viewer streams frame updates over `/viewer/live-sse`.
 
 ## Quick Manual Test
 
@@ -104,6 +129,26 @@ Then send commands like:
 REGISTER bot_one "" "" connect4
 CREATE connect4 1000 false
 LIST
+```
+
+Join an existing live arena from a second bot:
+
+```text
+REGISTER bot_two "" "" connect4
+JOIN 1 0
+```
+
+Watch a live arena without playing:
+
+```text
+REGISTER spectator "" ""
+WATCH 1
+```
+
+Or claim dashboard controls with a token minted from the browser:
+
+```text
+REGISTER bot_one "" "" connect4 owner_token=owner_...
 ```
 
 Open `http://localhost:3000` to watch arena updates as they happen.

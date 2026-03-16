@@ -1,4 +1,123 @@
 <div class="deck-grid">
+    <section class="panel owner-panel">
+        <h2>Bot Control</h2>
+        {{if .OwnerToken}}
+            <p class="admin-intro">This dashboard token can be claimed by one live bot session. Once a bot registers with it, the controls below apply only to that bot.</p>
+            <div class="owner-grid">
+                <article class="stat-card">
+                    <div class="stat-label">Bot Host/IP</div>
+                    <div class="stat-value">{{.BotHost}}</div>
+                </article>
+                <article class="stat-card">
+                    <div class="stat-label">Bot Port</div>
+                    <div class="stat-value">{{.BotPort}}</div>
+                </article>
+                <article class="stat-card">
+                    <div class="stat-label">Control Token</div>
+                    <div class="copy-row">
+                        <div class="token-value">{{.OwnerToken}}</div>
+                        <button type="button" class="copy-button" data-copy-text="{{.OwnerToken}}">Copy token</button>
+                    </div>
+                </article>
+            </div>
+
+            <section class="quickstart-panel">
+                <h3>Quickstart</h3>
+                <div class="quickstart-grid">
+                    <article class="quickstart-card">
+                        <div class="quickstart-step">1</div>
+                        <strong>Connect your bot</strong>
+                        <p>Point your client at <span class="quickstart-inline">{{.BotEndpoint}}</span>.</p>
+                    </article>
+                    <article class="quickstart-card">
+                        <div class="quickstart-step">2</div>
+                        <strong>Register with this token</strong>
+                        <p>Use a fresh identity or reuse an existing one. Capabilities can still be inserted before the owner token.</p>
+                        <pre class="quickstart-command">REGISTER your_bot "" "" connect4 owner_token={{.OwnerToken}}</pre>
+                        <div class="copy-row">
+                            <button type="button" class="copy-button" data-copy-text="REGISTER your_bot &quot;&quot; &quot;&quot; connect4 owner_token={{.OwnerToken}}">Copy sample command</button>
+                        </div>
+                    </article>
+                    <article class="quickstart-card">
+                        <div class="quickstart-step">3</div>
+                        <strong>Use the dashboard controls</strong>
+                        <p>After the session claims the token, this page unlocks create, join, and disconnect actions for that bot only.</p>
+                    </article>
+                </div>
+                <div class="copy-feedback" aria-live="polite"></div>
+            </section>
+
+            {{if .OwnerConnected}}
+                <div class="owner-status live">Linked to session #{{.OwnerSession.SessionID}} ({{.OwnerSession.BotName}}). {{if .OwnerSession.HasCurrentArena}}Current arena: #{{.OwnerSession.CurrentArenaID}}.{{else}}Bot is idle.{{end}}</div>
+            {{else}}
+                <div class="owner-status">Waiting for a bot to register with <strong>owner_token={{.OwnerToken}}</strong>.</div>
+            {{end}}
+
+            <details>
+                <summary>Connection Instructions</summary>
+                <pre>Connect your bot to {{.BotEndpoint}}
+
+New identity:
+REGISTER &lt;name&gt; "" "" owner_token={{.OwnerToken}}
+
+Returning identity:
+REGISTER &lt;name&gt; &lt;bot_id&gt; &lt;bot_secret&gt; owner_token={{.OwnerToken}}
+
+Optional capabilities can still be included before the owner token:
+REGISTER &lt;name&gt; "" "" connect4 owner_token={{.OwnerToken}}</pre>
+            </details>
+
+            {{if .OwnerConnected}}
+                <div class="admin-actions">
+                    <form class="admin-action" hx-post="/owner/create-arena" hx-target="#owner-result" hx-swap="innerHTML">
+                        <input type="hidden" name="owner_token" value="{{.OwnerToken}}" />
+                        <h3>Create Arena</h3>
+                        <label>Game</label>
+                        <input type="text" name="game" value="connect4" required />
+                        <label>Time Limit (ms)</label>
+                        <input type="number" min="1" name="time_ms" value="1000" required />
+                        <label>Allow Handicap</label>
+                        <select name="allow_handicap">
+                            <option value="false" selected>false</option>
+                            <option value="true">true</option>
+                        </select>
+                        <label>Game Args (comma or space separated)</label>
+                        <input type="text" name="game_args" placeholder="6,7" />
+                        <button type="submit">Create Arena</button>
+                    </form>
+
+                    {{if .OwnerSession.HasCurrentArena}}
+                        <article class="admin-action">
+                            <h3>Join Arena</h3>
+                            <p class="empty">This bot is already attached to arena #{{.OwnerSession.CurrentArenaID}}. Disconnect it before joining another arena.</p>
+                        </article>
+                    {{else}}
+                        <form class="admin-action" hx-post="/owner/join-arena" hx-target="#owner-result" hx-swap="innerHTML">
+                            <input type="hidden" name="owner_token" value="{{.OwnerToken}}" />
+                            <h3>Join Arena</h3>
+                            <label>Arena ID</label>
+                            <input type="number" min="1" name="arena_id" required />
+                            <label>Handicap Percent</label>
+                            <input type="number" name="handicap_percent" value="0" required />
+                            <button type="submit">Join Arena</button>
+                        </form>
+                    {{end}}
+
+                    <form class="admin-action" hx-post="/owner/eject-bot" hx-target="#owner-result" hx-swap="innerHTML">
+                        <input type="hidden" name="owner_token" value="{{.OwnerToken}}" />
+                        <h3>Disconnect Bot</h3>
+                        <label>Reason (optional)</label>
+                        <input type="text" name="reason" placeholder="Disconnected by dashboard owner" />
+                        <button type="submit">Disconnect</button>
+                    </form>
+                </div>
+            {{end}}
+            <div id="owner-result"></div>
+        {{else}}
+            <p class="empty">Click Register Bot in the top bar to mint a control token for this dashboard view.</p>
+        {{end}}
+    </section>
+
     <section class="panel stats-panel">
         <h2>Runtime Overview</h2>
         <div class="stat-grid">
@@ -35,7 +154,7 @@
                 <div class="stat-value">{{.Snapshot.NextMatchID}}</div>
             </article>
         </div>
-        <p class="generated-at">Snapshot generated: {{.Snapshot.GeneratedAt}}</p>
+        <p class="generated-at">Snapshot generated: {{fmtTime .Snapshot.GeneratedAt}}</p>
     </section>
 
     <section class="panel sessions-panel">
@@ -46,8 +165,8 @@
                     <thead>
                         <tr>
                             <th>ID</th>
-                            <th>Bot ID</th>
                             <th>Name</th>
+                            <th>Control</th>
                             <th>Player</th>
                             <th>Arena</th>
                             <th>W-L-D</th>
@@ -57,10 +176,10 @@
                     </thead>
                     <tbody>
                     {{range .Snapshot.Sessions}}
-                        <tr>
+                        <tr{{if and $.OwnerConnected (eq $.OwnerSession.SessionID .SessionID)}} class="session-owned"{{end}}>
                             <td>{{.SessionID}}</td>
-                            <td><code>{{.BotID}}</code></td>
-                            <td>{{.BotName}}</td>
+                            <td><span class="bot-id-hint" title="Bot ID: {{.BotID}}">{{.BotName}}</span>{{if and $.OwnerConnected (eq $.OwnerSession.SessionID .SessionID)}}<span class="owned-label">yours</span>{{end}}</td>
+                            <td>{{if .HasOwnerToken}}<span class="pill">linked</span>{{else}}<span class="muted">none</span>{{end}}</td>
                             <td>{{if eq .PlayerID 0}}-{{else}}{{.PlayerID}}{{end}}</td>
                             <td>{{if .HasCurrentArena}}#{{.CurrentArenaID}}{{else}}-{{end}}</td>
                             <td>{{.Wins}}-{{.Losses}}-{{.Draws}}</td>
@@ -92,23 +211,30 @@
                         <h3>Arena #{{.ID}}</h3>
                         <span class="status status-{{.Status}}">{{.Status}}</span>
                     </header>
+                    <div class="viewer-links">
+                        <a href="/viewer?arena_id={{.ID}}{{if $.AdminKey}}&admin_key={{$.AdminKey | urlquery}}{{end}}" target="_blank" rel="noopener noreferrer">Watch Live</a>
+                    </div>
                     <dl>
                         <dt>Game</dt>
                         <dd>{{.Game}}</dd>
                         <dt>Time Limit</dt>
-                        <dd>{{.TimeLimitMS}} ms</dd>
-                        <dt>Handicap</dt>
+                        <dd>{{fmtSeconds .TimeLimitMS}}</dd>
+                        <dt>Handicap Enabled</dt>
                         <dd>{{.AllowHandicap}}</dd>
+                        <dt>P1 Move Limit</dt>
+                        <dd>{{fmtSeconds .Bot1TimeMS}} ({{if ge .Player1Handicap 0}}+{{end}}{{.Player1Handicap}}%)</dd>
+                        <dt>P2 Move Limit</dt>
+                        <dd>{{fmtSeconds .Bot2TimeMS}} ({{if ge .Player2Handicap 0}}+{{end}}{{.Player2Handicap}}%)</dd>
                         <dt>Last Move</dt>
-                        <dd>{{.LastMove}}</dd>
+                        <dd>{{fmtTime .LastMove}}</dd>
                         <dt>Move Count</dt>
                         <dd>{{.MoveCount}}</dd>
                         <dt>Created</dt>
-                        <dd>{{.CreatedAt}}</dd>
+                        <dd>{{fmtTime .CreatedAt}}</dd>
                         <dt>Activated</dt>
-                        <dd>{{if .ActivatedAt}}{{.ActivatedAt}}{{else}}<span class="muted">not active yet</span>{{end}}</dd>
+                        <dd>{{if .ActivatedAt}}{{fmtTime .ActivatedAt}}{{else}}<span class="muted">not active yet</span>{{end}}</dd>
                         <dt>Completed</dt>
-                        <dd>{{if .CompletedAt}}{{.CompletedAt}}{{else}}<span class="muted">in progress</span>{{end}}</dd>
+                        <dd>{{if .CompletedAt}}{{fmtTime .CompletedAt}}{{else}}<span class="muted">in progress</span>{{end}}</dd>
                     </dl>
                     <div class="players">
                         <div>
@@ -151,25 +277,42 @@
                 <table>
                     <thead>
                         <tr>
-                            <th>Bot ID</th>
-                            <th>Display Name</th>
+                            <th>Bot</th>
                             <th>Games</th>
                             <th>W-L-D</th>
                             <th>Registrations</th>
-                            <th>Created</th>
                             <th>Last Seen</th>
                         </tr>
                     </thead>
                     <tbody>
                         {{range .Snapshot.Bots}}
                             <tr>
-                                <td><code>{{.BotID}}</code></td>
-                                <td>{{.DisplayName}}</td>
+                                <td>
+                                    <details class="bot-row-details">
+                                        <summary class="bot-summary" title="Bot ID: {{.BotID}}">{{.DisplayName}}</summary>
+                                        <article class="bot-detail-card">
+                                            <h4>Bot Profile</h4>
+                                            <dl>
+                                                <dt>Bot ID</dt>
+                                                <dd><code>{{.BotID}}</code></dd>
+                                                <dt>Created</dt>
+                                                <dd>{{fmtTime .CreatedAt}}</dd>
+                                                <dt>Last Seen</dt>
+                                                <dd>{{fmtTime .LastSeenAt}}</dd>
+                                                <dt>Games</dt>
+                                                <dd>{{.GamesPlayed}}</dd>
+                                                <dt>W-L-D</dt>
+                                                <dd>{{.Wins}}-{{.Losses}}-{{.Draws}}</dd>
+                                                <dt>Registrations</dt>
+                                                <dd>{{.RegistrationCount}}</dd>
+                                            </dl>
+                                        </article>
+                                    </details>
+                                </td>
                                 <td>{{.GamesPlayed}}</td>
                                 <td>{{.Wins}}-{{.Losses}}-{{.Draws}}</td>
                                 <td>{{.RegistrationCount}}</td>
-                                <td>{{.CreatedAt}}</td>
-                                <td>{{.LastSeenAt}}</td>
+                                <td>{{fmtTime .LastSeenAt}}</td>
                             </tr>
                         {{end}}
                     </tbody>
@@ -190,19 +333,22 @@
                             <h3>Match #{{.MatchID}} (Arena {{.ArenaID}})</h3>
                             <span class="status status-{{.TerminalStatus}}">{{.TerminalStatus}}</span>
                         </header>
+                        <div class="viewer-links">
+                            <a href="/viewer?match_id={{.MatchID}}{{if $.AdminKey}}&admin_key={{$.AdminKey | urlquery}}{{end}}" target="_blank" rel="noopener noreferrer">Watch Replay</a>
+                        </div>
                         <dl>
                             <dt>Game</dt>
                             <dd>{{.Game}}</dd>
                             <dt>Reason</dt>
                             <dd>{{.EndReason}}</dd>
                             <dt>Winner</dt>
-                            <dd>{{if .IsDraw}}draw{{else}}{{.WinnerBotName}} ({{.WinnerBotID}}){{end}}</dd>
+                            <dd>{{if .IsDraw}}draw{{else}}<span class="bot-id-hint" title="Bot ID: {{.WinnerBotID}}">{{.WinnerBotName}}</span>{{end}}</dd>
                             <dt>Moves</dt>
                             <dd>{{.MoveCount}}</dd>
                             <dt>Started</dt>
-                            <dd>{{.StartedAt}}</dd>
+                            <dd>{{fmtTime .StartedAt}}</dd>
                             <dt>Ended</dt>
-                            <dd>{{.EndedAt}}</dd>
+                            <dd>{{fmtTime .EndedAt}}</dd>
                         </dl>
                         <details>
                             <summary>Move Sequence</summary>

@@ -12,6 +12,11 @@ import (
 	"github.com/JonKirkpatrick/bbs/stadium"
 )
 
+const (
+	botServerPort       = "8080"
+	dashboardServerPort = "3000"
+)
+
 // WelcomeBanner is the ASCII art displayed to bots upon connection, along with a brief introduction to the Build-a-Bot Stadium.
 const WelcomeBanner = `
 ######################################################################
@@ -35,14 +40,14 @@ const WelcomeBanner = `
 // It listens for incoming TCP connections from bots, manages their sessions,
 // and routes commands to the stadium manager for processing.
 func main() {
-	listener, err := net.Listen("tcp", ":8080")
+	listener, err := net.Listen("tcp", ":"+botServerPort)
 	if err != nil {
 		fmt.Println("Error starting stadium:", err)
 		return
 	}
 	defer listener.Close()
 
-	fmt.Println("Build-a-Bot Stadium is OPEN and listening on port 8080...")
+	fmt.Printf("Build-a-Bot Stadium is OPEN and listening on port %s...\n", botServerPort)
 	go startDashboard()
 
 	for {
@@ -99,17 +104,13 @@ func handleBot(conn net.Conn) {
 
 		case "REGISTER":
 			if len(parts) < 4 {
-				sess.SendJSON(stadium.Response{Status: "err", Type: "auth", Payload: "Usage: REGISTER <name> <bot_id_or_\"\"> <bot_secret_or_\"\"> [cap1,cap2,...]"})
+				sess.SendJSON(stadium.Response{Status: "err", Type: "auth", Payload: "Usage: REGISTER <name> <bot_id_or_\"\"> <bot_secret_or_\"\"> [cap1,cap2,...] [owner_token=<token>]"})
 				continue
 			}
 
-			// Parse capabilities if provided (e.g., "connect4,tictactoe")
-			var caps []string
-			if len(parts) > 4 {
-				caps = strings.Split(parts[4], ",")
-			}
+			caps, ownerToken := parseRegisterOptions(parts[4:])
 
-			result, err := stadium.DefaultManager.RegisterSession(sess, parts[1], parts[2], parts[3], caps)
+			result, err := stadium.DefaultManager.RegisterSession(sess, parts[1], parts[2], parts[3], caps, ownerToken)
 			if err != nil {
 				sess.SendJSON(stadium.Response{Status: "err", Type: "auth", Payload: err.Error()})
 				continue
@@ -158,19 +159,27 @@ func handleBot(conn net.Conn) {
 			timeLimit, _ := strconv.Atoi(parts[2])
 			allowHandicap := parts[3] == "true"
 
-			arenaID := stadium.DefaultManager.CreateArena(game, time.Duration(timeLimit)*time.Millisecond, allowHandicap)
+			arenaID := stadium.DefaultManager.CreateArena(game, parts[4:], time.Duration(timeLimit)*time.Millisecond, allowHandicap)
 			sess.SendJSON(stadium.Response{Status: "ok", Type: "create", Payload: strconv.Itoa(arenaID)})
 
 		case "JOIN":
-			// Usage: JOIN <arena_id> <handicap_value>
+			// Usage: JOIN <arena_id> <handicap_percent>
 			if len(parts) < 3 {
-				sess.SendJSON(stadium.Response{Status: "err", Type: "error", Payload: "Usage: JOIN <arena_id> <handicap>"})
+				sess.SendJSON(stadium.Response{Status: "err", Type: "error", Payload: "Usage: JOIN <arena_id> <handicap_percent>"})
 				continue
 			}
-			arenaID, _ := strconv.Atoi(parts[1])
-			handicap, _ := strconv.Atoi(parts[2])
+			arenaID, err := strconv.Atoi(parts[1])
+			if err != nil || arenaID <= 0 {
+				sess.SendJSON(stadium.Response{Status: "err", Type: "error", Payload: "arena_id must be a positive integer"})
+				continue
+			}
+			handicap, err := strconv.Atoi(parts[2])
+			if err != nil {
+				sess.SendJSON(stadium.Response{Status: "err", Type: "error", Payload: "handicap_percent must be an integer"})
+				continue
+			}
 
-			err := stadium.DefaultManager.JoinArena(arenaID, sess, handicap)
+			err = stadium.DefaultManager.JoinArena(arenaID, sess, handicap)
 			if err != nil {
 				sess.SendJSON(stadium.Response{Status: "err", Type: "error", Payload: err.Error()})
 			}
@@ -188,11 +197,15 @@ func handleBot(conn net.Conn) {
 
 			// 1. Calculate elapsed time since the last action
 			elapsed := time.Since(sess.CurrentArena.LastMove)
+			moveLimit := sess.CurrentArena.MoveLimitForPlayer(sess.PlayerID)
+			if moveLimit <= 0 {
+				moveLimit = sess.CurrentArena.TimeLimit
+			}
 
-			// 2. The Kill Switch: Check if they exceeded the arena's TimeLimit
-			if elapsed > sess.CurrentArena.TimeLimit {
+			// 2. The Kill Switch: Check if they exceeded this player's effective move limit
+			if elapsed > moveLimit {
 				arenaRef := sess.CurrentArena
-				msg := fmt.Sprintf("TIMEOUT: Move took %v (Limit: %v)", elapsed.Round(time.Millisecond), sess.CurrentArena.TimeLimit)
+				msg := fmt.Sprintf("TIMEOUT: Move took %v (Limit: %v)", elapsed.Round(time.Millisecond), moveLimit)
 
 				// Notify everyone that the clock claimed a victim
 				sess.CurrentArena.NotifyAll("error", msg)
@@ -216,6 +229,7 @@ func handleBot(conn net.Conn) {
 				sess.SendJSON(stadium.Response{Status: "err", Type: "error", Payload: err.Error()})
 			} else {
 				arenaRef := sess.CurrentArena
+				audience := arenaRef.Audience()
 				_ = stadium.DefaultManager.RecordMove(sess.CurrentArena.ID, sess, parts[1], elapsed)
 
 				sess.SendJSON(stadium.Response{Status: "ok", Type: "move", Payload: "accepted"})
@@ -229,7 +243,7 @@ func handleBot(conn net.Conn) {
 					winnerPlayerID, isDraw := parseWinnerResult(winner)
 					record, finalizeErr := stadium.DefaultManager.FinalizeArena(arenaRef.ID, "game_over", winnerPlayerID, isDraw)
 					if finalizeErr == nil {
-						arenaRef.NotifyAll("gameover", record)
+						stadium.SendJSONToSessions(audience, stadium.Response{Status: "ok", Type: "gameover", Payload: record})
 					}
 				}
 			}
@@ -286,6 +300,36 @@ func handleBot(conn net.Conn) {
 			conn.Write([]byte("ERR: Unknown command\n"))
 		}
 	}
+}
+
+func parseRegisterOptions(rawParts []string) ([]string, string) {
+	capabilities := make([]string, 0)
+	ownerToken := ""
+
+	for _, raw := range rawParts {
+		part := strings.TrimSpace(raw)
+		if part == "" {
+			continue
+		}
+
+		if strings.HasPrefix(strings.ToLower(part), "owner_token=") {
+			ownerToken = strings.TrimSpace(part[len("owner_token="):])
+			continue
+		}
+
+		for _, capPart := range strings.Split(part, ",") {
+			capability := strings.TrimSpace(capPart)
+			if capability != "" {
+				capabilities = append(capabilities, capability)
+			}
+		}
+	}
+
+	if len(capabilities) == 0 {
+		capabilities = nil
+	}
+
+	return capabilities, ownerToken
 }
 
 func parseWinnerResult(raw string) (winnerPlayerID int, isDraw bool) {

@@ -16,3 +16,12 @@ func (s *Session) SendJSON(res Response) {
 	data, _ := json.Marshal(res)
 	s.Conn.Write(append(data, '\n'))
 }
+
+func SendJSONToSessions(sessions []*Session, res Response) {
+	for _, session := range sessions {
+		if session == nil || session.Conn == nil {
+			continue
+		}
+		session.SendJSON(res)
+	}
+}

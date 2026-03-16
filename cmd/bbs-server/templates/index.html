@@ -99,6 +99,18 @@
             cursor: pointer;
         }
 
+        .mode-link {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            text-decoration: none;
+            font: inherit;
+            border: 1px solid var(--ink);
+            padding: 0.38rem 0.55rem;
+            background: white;
+            color: var(--ink);
+        }
+
         .live-shell {
             margin-top: 1.2rem;
         }
@@ -192,6 +204,53 @@
             font-style: italic;
         }
 
+        .bot-id-hint {
+            border-bottom: 1px dotted #7e8aa4;
+            cursor: help;
+        }
+
+        .bot-row-details {
+            margin: 0;
+        }
+
+        .bot-summary {
+            cursor: pointer;
+            color: var(--accent);
+            font-weight: 600;
+            list-style: none;
+        }
+
+        .bot-summary::-webkit-details-marker {
+            display: none;
+        }
+
+        .bot-summary::after {
+            content: "  [details]";
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 0.75rem;
+            color: #4a5a77;
+        }
+
+        .bot-row-details[open] .bot-summary::after {
+            content: "  [hide]";
+        }
+
+        .bot-detail-card {
+            margin-top: 0.45rem;
+            border: 1px dashed var(--line);
+            background: #fffdf8;
+            padding: 0.55rem;
+        }
+
+        .bot-detail-card h4 {
+            margin: 0 0 0.4rem;
+            font-size: 0.9rem;
+        }
+
+        .bot-detail-card dl {
+            font-size: 0.82rem;
+        }
+
         .empty {
             margin: 0;
             font-family: "IBM Plex Mono", monospace;
@@ -260,6 +319,21 @@
         .observers ul {
             margin: 0.35rem 0 0;
             padding-left: 1rem;
+        }
+
+        .viewer-links {
+            margin: 0.35rem 0 0.55rem;
+        }
+
+        .viewer-links a {
+            display: inline-block;
+            text-decoration: none;
+            border: 1px solid var(--accent);
+            color: var(--accent);
+            padding: 0.2rem 0.42rem;
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 0.75rem;
+            background: #f0fbfd;
         }
 
         details {
@@ -343,6 +417,137 @@
             background: #fde2e4;
         }
 
+        .owner-status {
+            margin: 0.8rem 0;
+            border: 1px solid var(--line);
+            background: white;
+            padding: 0.65rem;
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 0.84rem;
+        }
+
+        .owner-status.live {
+            border-color: var(--good);
+            background: #e8f8ed;
+        }
+
+        .owner-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 0.65rem;
+        }
+
+        .token-value {
+            margin-top: 0.35rem;
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 0.82rem;
+            word-break: break-all;
+        }
+
+        .copy-row {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.55rem;
+            margin-top: 0.35rem;
+        }
+
+        .copy-button {
+            border: 1px solid var(--accent);
+            background: #f0fbfd;
+            color: var(--accent);
+            padding: 0.25rem 0.5rem;
+            font: inherit;
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 0.78rem;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .copy-feedback {
+            min-height: 1.1rem;
+            margin-top: 0.5rem;
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 0.78rem;
+            color: #355070;
+        }
+
+        .copy-feedback.error {
+            color: var(--bad);
+        }
+
+        .quickstart-panel {
+            margin-top: 0.85rem;
+            border: 1px dashed var(--line);
+            background: #fffdf8;
+            padding: 0.8rem;
+        }
+
+        .quickstart-panel h3 {
+            margin: 0 0 0.6rem;
+            font-size: 1rem;
+        }
+
+        .quickstart-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 0.7rem;
+        }
+
+        .quickstart-card {
+            border: 1px solid var(--line);
+            background: white;
+            padding: 0.75rem;
+        }
+
+        .quickstart-card p {
+            margin: 0.4rem 0 0;
+            font-size: 0.88rem;
+        }
+
+        .quickstart-step {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 1.55rem;
+            height: 1.55rem;
+            margin-bottom: 0.55rem;
+            border: 1px solid var(--ink);
+            background: #f7f3ea;
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+
+        .quickstart-inline {
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 0.84rem;
+        }
+
+        .quickstart-command {
+            margin-top: 0.55rem;
+            margin-bottom: 0;
+            background: #182430;
+            color: #b8f3d0;
+            padding: 0.55rem;
+            font-size: 0.76rem;
+        }
+
+        .session-owned {
+            background: #eef9fb;
+        }
+
+        .owned-label {
+            display: inline-block;
+            margin-left: 0.45rem;
+            border: 1px solid var(--accent);
+            padding: 0.08rem 0.35rem;
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 0.72rem;
+            background: #f0fbfd;
+            color: var(--accent);
+        }
+
         @media (max-width: 720px) {
             .shell {
                 width: 96vw;
@@ -368,11 +573,15 @@
 
             <div class="mode-row">
                 <span class="badge">Viewer mode</span>
+                {{if .OwnerToken}}
+                    <span class="badge">Bot control token active</span>
+                {{end}}
                 {{if .AdminConfigured}}
                     {{if .IsAdmin}}
                         <span class="badge admin">Admin mode active</span>
                     {{else}}
                         <form method="GET" action="/" class="admin-form">
+                            {{if .OwnerToken}}<input type="hidden" name="owner_token" value="{{.OwnerToken}}" />{{end}}
                             <label for="admin_key">Admin key</label>
                             <input id="admin_key" type="password" name="admin_key" value="{{.AdminKey}}" autocomplete="off" />
                             <button type="submit">Enable admin</button>
@@ -381,11 +590,20 @@
                 {{else}}
                     <span class="badge">Admin disabled (`BBS_DASHBOARD_ADMIN_KEY` not set)</span>
                 {{end}}
+
+                <form method="POST" action="/owner/register-bot" class="admin-form">
+                    {{if .AdminKey}}<input type="hidden" name="admin_key" value="{{.AdminKey}}" />{{end}}
+                    <button type="submit">{{if .OwnerToken}}Issue New Bot Token{{else}}Register Bot{{end}}</button>
+                </form>
+
+                {{if or .OwnerToken .AdminKey}}
+                    <a class="mode-link" href="/">Reset View</a>
+                {{end}}
             </div>
         </header>
 
         <main class="live-shell">
-            <div hx-ext="sse" sse-connect="/dashboard-sse{{if .AdminKey}}?admin_key={{.AdminKey | urlquery}}{{end}}">
+            <div hx-ext="sse" sse-connect="/dashboard-sse{{.SSEQuery}}">
                 <div sse-swap="state">
                     <div class="topbar">
                         Connecting to live state stream...
@@ -396,6 +614,59 @@
     </div>
 
     <script>
+        async function copyTextValue(text) {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(text);
+                return;
+            }
+
+            const helper = document.createElement("textarea");
+            helper.value = text;
+            helper.setAttribute("readonly", "readonly");
+            helper.style.position = "fixed";
+            helper.style.top = "-1000px";
+            document.body.appendChild(helper);
+            helper.select();
+            document.execCommand("copy");
+            document.body.removeChild(helper);
+        }
+
+        function setCopyFeedback(button, message, isError) {
+            const panel = button.closest(".quickstart-panel") || button.closest(".stat-card") || button.parentElement;
+            if (!panel) {
+                return;
+            }
+
+            const feedback = panel.querySelector(".copy-feedback") || document.querySelector(".quickstart-panel .copy-feedback");
+            if (!feedback) {
+                return;
+            }
+
+            feedback.textContent = message;
+            feedback.classList.toggle("error", !!isError);
+
+            window.clearTimeout(feedback._clearTimer);
+            feedback._clearTimer = window.setTimeout(function () {
+                feedback.textContent = "";
+                feedback.classList.remove("error");
+            }, 2200);
+        }
+
+        document.body.addEventListener("click", function (event) {
+            const button = event.target.closest(".copy-button[data-copy-text]");
+            if (!button) {
+                return;
+            }
+
+            copyTextValue(button.getAttribute("data-copy-text"))
+                .then(function () {
+                    setCopyFeedback(button, "Copied to clipboard.", false);
+                })
+                .catch(function () {
+                    setCopyFeedback(button, "Clipboard copy failed in this browser.", true);
+                });
+        });
+
         document.body.addEventListener("htmx:sseError", function () {
             console.warn("Dashboard SSE disconnected or errored");
         });

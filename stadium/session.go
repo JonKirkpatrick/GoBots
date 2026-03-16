@@ -12,6 +12,7 @@ type Session struct {
 	mu           sync.Mutex // Protects concurrent writes to the connection
 	BotID        string
 	BotName      string
+	OwnerToken   string
 	PlayerID     int // 1 or 2
 	CurrentArena *Arena
 	Capabilities []string
