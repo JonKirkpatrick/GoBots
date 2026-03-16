@@ -95,6 +95,33 @@ Common commands:
 
 For the full wire protocol, see `PROTOCOL.md`.
 
+## Agent Abstraction (Draft)
+
+If you want bot authors to avoid handling raw TCP and BBS JSON directly, see:
+
+* `BBS_AGENT_CONTRACT.md` - draft sidecar contract (`bbs-agent` <-> worker over JSONL stdin/stdout)
+* `examples/python_worker_contract_template.py` - minimal worker template that implements the contract
+
+The intended model is:
+
+1. `bbs-agent` handles server networking/registration/reconnect
+2. worker code handles decision logic (`state` in, `move` out)
+
+### bbs-agent MVP Command
+
+From repository root:
+
+```bash
+go run ./cmd/bbs-agent \
+	--server localhost:8080 \
+	--name agent_python_bot \
+	--owner-token owner_... \
+	--worker python3 \
+	--worker-arg examples/python_worker_contract_template.py
+```
+
+See `cmd/bbs-agent/README.md` for details.
+
 ## Dashboard
 
 Open `http://localhost:3000` in a browser to view active arenas. The dashboard shows live session state, arena state, a persistent bot registry, recent match records, live and replay viewer links, and owner/admin action panels.
