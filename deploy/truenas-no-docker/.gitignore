@@ -3,3 +3,4 @@ bin/bbs-server
 scripts/*.log
 scripts/*.pid
 scripts/.update.lock
+scripts/.update-release.lock

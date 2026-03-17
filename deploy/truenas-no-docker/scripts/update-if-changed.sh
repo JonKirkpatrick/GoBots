@@ -13,6 +13,12 @@ if ! flock -n 9; then
   exit 0
 fi
 
+if ! command -v go >/dev/null 2>&1; then
+  echo "[$(date -Iseconds)] go not found; delegating to release updater" >>"$LOG_FILE"
+  "$SCRIPT_DIR/update-from-release.sh"
+  exit $?
+fi
+
 if ! git -C "$REPO_ROOT" diff --quiet || ! git -C "$REPO_ROOT" diff --cached --quiet; then
   echo "[$(date -Iseconds)] update aborted: tracked local changes exist in repo" >>"$LOG_FILE"
   exit 1

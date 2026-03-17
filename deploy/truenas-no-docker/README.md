@@ -13,13 +13,13 @@ Use this if you do not want to use Docker/Apps.
 
 ## Important Requirements
 
-- You need `git` and `go` installed on the host shell.
+- You need `git` on the host shell.
 - Server runtime state is in-memory. Restarts clear active runtime state/history.
 
-If `go` is missing, either:
+For updates/builds, you have two options:
 
-- install Go on the host, or
-- build the binary elsewhere and copy it to `deploy/truenas-no-docker/bin/bbs-server`.
+- `go` available on TrueNAS: build from source with `scripts/build-server.sh`
+- no `go` on TrueNAS: download prebuilt release binary with `scripts/update-from-release.sh`
 
 ## 1. Clone To A Persistent Dataset
 
@@ -47,6 +47,8 @@ BBS_DASHBOARD_ADMIN_KEY=<long-random-secret>
 Optional:
 
 - `TZ=UTC`
+- `BBS_BINARY_URL` (direct binary URL)
+- or release fields (`BBS_RELEASE_OWNER`, `BBS_RELEASE_REPO`, `BBS_RELEASE_TAG`, `BBS_RELEASE_ASSET`)
 
 ## 3. Make Scripts Executable
 
@@ -61,6 +63,23 @@ chmod +x scripts/*.sh
 ./scripts/start-server.sh
 ./scripts/status-server.sh
 ```
+
+## 4b. No-Go Host: Download Binary And Start
+
+If your TrueNAS host does not have Go installed:
+
+```bash
+./scripts/update-from-release.sh
+./scripts/status-server.sh
+```
+
+The release updater expects GitHub release assets named like:
+
+- `bbs-server-linux-amd64`
+- `bbs-server-linux-arm64`
+
+If you host your own fork, publish these assets in Releases first.
+This repo includes `.github/workflows/release-bbs-server.yml`, which publishes both assets when you push a `v*` tag.
 
 Dashboard URL:
 
@@ -83,15 +102,22 @@ Logs:
 - runtime log: `scripts/bbs-server.log`
 - build log: `scripts/build.log`
 - update log: `scripts/update.log`
+- release update log: `scripts/update-release.log`
 
 ## 6. Optional Cron Jobs
 
 Create TrueNAS cron jobs in `System Settings` -> `Advanced` -> `Cron Jobs`.
 
-1. Nightly update/rebuild/restart at 00:00:
+1. Nightly source update/rebuild/restart at 00:00 (requires Go):
 
 ```bash
 /usr/bin/env bash /mnt/tank/apps/bbs/deploy/truenas-no-docker/scripts/update-if-changed.sh
+```
+
+Alternative for hosts without Go (download prebuilt release binary):
+
+```bash
+/usr/bin/env bash /mnt/tank/apps/bbs/deploy/truenas-no-docker/scripts/update-from-release.sh
 ```
 
 2. Optional forced restart at 00:10:
@@ -100,7 +126,7 @@ Create TrueNAS cron jobs in `System Settings` -> `Advanced` -> `Cron Jobs`.
 /usr/bin/env bash /mnt/tank/apps/bbs/deploy/truenas-no-docker/scripts/restart-server.sh
 ```
 
-If you prefer fewer interruptions, keep only `update-if-changed.sh`.
+If you prefer fewer interruptions, keep only one updater job.
 
 ## Startup On Boot (Simple Cron @reboot)
 
@@ -112,6 +138,6 @@ Add a cron job that runs on reboot:
 
 ## Troubleshooting
 
-- `go: command not found`: install Go or copy a prebuilt binary into `bin/bbs-server`.
+- `go: command not found`: use `scripts/update-from-release.sh` or copy a prebuilt binary into `bin/bbs-server`.
 - `missing .env`: run `cp .env.example .env` and set admin key.
 - process exits immediately: check `scripts/bbs-server.log`.
