@@ -68,6 +68,8 @@ fi
 
 echo "[$(date -Iseconds)] release update started arch=$arch url=$binary_url" >>"$LOG_FILE"
 
+mkdir -p "$(dirname "$BIN_PATH")"
+
 if ! curl -fL --connect-timeout 15 --max-time 180 "$binary_url" -o "$TMP_PATH" >>"$LOG_FILE" 2>&1; then
   rm -f "$TMP_PATH"
   echo "[$(date -Iseconds)] release update failed: download failed" >>"$LOG_FILE"
