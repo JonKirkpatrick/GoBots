@@ -23,11 +23,13 @@ This guide sets up an always-on `bbs-server` on your TrueNAS SCALE box so you ca
 Example (adjust to your pool/dataset):
 
 ```bash
-mkdir -p /mnt/tank/apps
-cd /mnt/tank/apps
+mkdir -p /mnt/<pool>/apps
+cd /mnt/<pool>/apps
 git clone https://github.com/JonKirkpatrick/bbs.git
 cd bbs/deploy/truenas
 ```
+
+Use the same base path in any cron command examples below.
 
 ## 2. Create Runtime Env File
 
@@ -84,13 +86,13 @@ Create two cron tasks in TrueNAS UI (`System Settings` -> `Advanced` -> `Cron Jo
 1. Nightly update check (00:00):
 
 ```bash
-/usr/bin/env bash /mnt/tank/apps/bbs/deploy/truenas/scripts/update-if-changed.sh
+/usr/bin/env bash /mnt/<pool>/apps/bbs/deploy/truenas/scripts/update-if-changed.sh
 ```
 
 2. Optional nightly restart (00:10):
 
 ```bash
-/usr/bin/env bash /mnt/tank/apps/bbs/deploy/truenas/scripts/restart-server.sh
+/usr/bin/env bash /mnt/<pool>/apps/bbs/deploy/truenas/scripts/restart-server.sh
 ```
 
 If you prefer minimal disruption, skip the forced restart and keep only `update-if-changed.sh`.

@@ -26,11 +26,13 @@ For updates/builds, you have two options:
 Example path (adjust to your pool):
 
 ```bash
-mkdir -p /mnt/tank/apps
-cd /mnt/tank/apps
+mkdir -p /mnt/<pool>/apps
+cd /mnt/<pool>/apps
 git clone https://github.com/JonKirkpatrick/bbs.git
 cd bbs/deploy/truenas-no-docker
 ```
+
+Use the same base path in any cron command examples below.
 
 ## 2. Configure Environment
 
@@ -80,6 +82,7 @@ The release updater expects GitHub release assets named like:
 
 If you host your own fork, publish these assets in Releases first.
 This repo includes `.github/workflows/release-bbs-server.yml`, which publishes both assets when you push a `v*` tag.
+Tag names are case-sensitive; use lowercase `v` (example: `v0.0.2`).
 
 Dashboard URL:
 
@@ -111,19 +114,19 @@ Create TrueNAS cron jobs in `System Settings` -> `Advanced` -> `Cron Jobs`.
 1. Nightly source update/rebuild/restart at 00:00 (requires Go):
 
 ```bash
-/usr/bin/env bash /mnt/tank/apps/bbs/deploy/truenas-no-docker/scripts/update-if-changed.sh
+/usr/bin/env bash /mnt/<pool>/apps/bbs/deploy/truenas-no-docker/scripts/update-if-changed.sh
 ```
 
 Alternative for hosts without Go (download prebuilt release binary):
 
 ```bash
-/usr/bin/env bash /mnt/tank/apps/bbs/deploy/truenas-no-docker/scripts/update-from-release.sh
+/usr/bin/env bash /mnt/<pool>/apps/bbs/deploy/truenas-no-docker/scripts/update-from-release.sh
 ```
 
 2. Optional forced restart at 00:10:
 
 ```bash
-/usr/bin/env bash /mnt/tank/apps/bbs/deploy/truenas-no-docker/scripts/restart-server.sh
+/usr/bin/env bash /mnt/<pool>/apps/bbs/deploy/truenas-no-docker/scripts/restart-server.sh
 ```
 
 If you prefer fewer interruptions, keep only one updater job.
@@ -133,11 +136,12 @@ If you prefer fewer interruptions, keep only one updater job.
 Add a cron job that runs on reboot:
 
 ```bash
-/usr/bin/env bash /mnt/tank/apps/bbs/deploy/truenas-no-docker/scripts/start-server.sh
+/usr/bin/env bash /mnt/<pool>/apps/bbs/deploy/truenas-no-docker/scripts/start-server.sh
 ```
 
 ## Troubleshooting
 
 - `go: command not found`: use `scripts/update-from-release.sh` or copy a prebuilt binary into `bin/bbs-server`.
 - `missing .env`: run `cp .env.example .env` and set admin key.
+- `curl: (23) Failure writing output to destination`: update scripts (`git pull`) and ensure `deploy/truenas-no-docker/bin/` exists.
 - process exits immediately: check `scripts/bbs-server.log`.
