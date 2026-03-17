@@ -96,17 +96,17 @@ Common commands:
 
 For the full wire protocol, see `PROTOCOL.md`.
 
-## Agent Abstraction (Draft)
+## Agent Abstraction
 
 If you want bot authors to avoid handling raw TCP and BBS JSON directly, see:
 
-* `BBS_AGENT_CONTRACT.md` - draft sidecar contract (`bbs-agent` <-> worker over JSONL stdin/stdout)
+* `BBS_AGENT_CONTRACT.md` - sidecar contract (`bbs-agent` <-> worker over JSONL stdin/stdout)
 * `examples/python_worker_contract_template.py` - minimal worker template that implements the contract
 
 The intended model is:
 
 1. `bbs-agent` handles server networking/registration/reconnect
-2. worker code handles decision logic (`state` in, `move` out)
+2. worker code handles decision logic (`turn` in, `action` out)
 
 ### bbs-agent MVP Command
 
@@ -150,6 +150,8 @@ The match viewer is served at `/viewer`:
 * `GET /viewer?match_id=<id>` opens a replay viewer for an archived match
 
 The replay viewer loads frame data from `/viewer/replay-data`, and the live viewer streams frame updates over `/viewer/live-sse`.
+
+For an always-on home-lab deployment, see `deploy/truenas/README.md`.
 
 ## Quick Manual Test
 

@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Python worker template for BBS Agent Contract v0.1.
+"""Python worker template for BBS Agent Contract v0.2.
 
-This script does not talk to the BBS server directly.
-It talks to a future bbs-agent process over stdin/stdout JSON lines.
+Protocol shape:
+- agent -> worker: `welcome`, `turn`, `shutdown`
+- worker -> agent: `action`, `log`
 
-Bot authors should mainly customize choose_move().
+The turn payload follows an RL-style loop:
+- obs, response, reward, done, truncated, deadline_ms
 """
 
 from __future__ import annotations
@@ -14,7 +16,7 @@ import random
 import sys
 from typing import Any, Dict, Optional
 
-CONTRACT_VERSION = "0.1"
+CONTRACT_VERSION = "0.2"
 
 
 def send_message(msg_type: str, payload: Dict[str, Any], msg_id: Optional[str] = None) -> None:
@@ -39,51 +41,42 @@ class WorkerState:
         self.session_id: Optional[int] = None
         self.arena_id: Optional[int] = None
         self.player_id: Optional[int] = None
-        self.game: str = ""
+        self.env: str = ""
+        self.effective_time_limit_ms: int = 0
 
 
-def normalized_game_name(name: str) -> str:
+def normalized_name(name: str) -> str:
     return name.strip().lower()
 
 
-def is_our_turn(state_payload: Dict[str, Any], worker_state: WorkerState) -> bool:
-    """Best-effort turn inference from generic payload.
-
-    The v0.1 contract intentionally keeps raw_state game-agnostic,
-    so this helper checks common keys if the agent provides them.
-    """
-
-    if "your_turn" in state_payload:
-        return bool(state_payload.get("your_turn"))
-
-    turn_player = state_payload.get("turn_player")
-    return worker_state.player_id is not None and turn_player == worker_state.player_id
+def is_empty_cell(cell: Any) -> bool:
+    if isinstance(cell, bool):
+        return False
+    if isinstance(cell, (int, float)):
+        return int(cell) == 0
+    if isinstance(cell, str):
+        return cell.strip() in {"", "0"}
+    return False
 
 
-def choose_move(state_payload: Dict[str, Any], worker_state: WorkerState) -> Optional[str]:
-    """Customize this function with your actual bot logic.
-
-    Default behavior:
-    - for connect4, derive legal columns from the top board row in state_obj
-    - fallback to `legal_moves` if present
-    - otherwise return None (no move emitted)
-    """
-
-    if normalized_game_name(worker_state.game) == "connect4" or looks_like_connect4_board(state_payload):
-        legal_cols = connect4_legal_columns_from_state(state_payload)
-        if legal_cols:
-            return random.choice(legal_cols)
-
-    legal_moves = state_payload.get("legal_moves")
-    if isinstance(legal_moves, list) and legal_moves:
-        picked = random.choice([str(m) for m in legal_moves])
-        return picked
-
-    return None
+def as_int(value: Any, default: int = 0) -> int:
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return default
+        try:
+            return int(text)
+        except ValueError:
+            return default
+    return default
 
 
-def connect4_legal_columns_from_state(state_payload: Dict[str, Any]) -> list[str]:
-    state_obj = state_payload.get("state_obj")
+def connect4_legal_columns(obs: Dict[str, Any]) -> list[str]:
+    state_obj = obs.get("state_obj")
     if not isinstance(state_obj, dict):
         return []
 
@@ -99,79 +92,64 @@ def connect4_legal_columns_from_state(state_payload: Dict[str, Any]) -> list[str
     for col, cell in enumerate(top_row):
         if is_empty_cell(cell):
             legal.append(str(col))
-
     return legal
 
 
-def looks_like_connect4_board(state_payload: Dict[str, Any]) -> bool:
-    state_obj = state_payload.get("state_obj")
-    if not isinstance(state_obj, dict):
-        return False
-
-    board = state_obj.get("board")
-    if not isinstance(board, list) or not board:
-        return False
-
-    first_row = board[0]
-    if not isinstance(first_row, list):
-        return False
-
-    cols = len(first_row)
-    if cols == 0:
-        return False
-
-    # Typical Connect4 shape is 6x7, but we allow compatible variants.
-    if len(board) < 4 or cols < 4:
-        return False
-
-    for row in board:
-        if not isinstance(row, list) or len(row) != cols:
-            return False
-
-    return True
+def is_our_turn(obs: Dict[str, Any], worker_state: WorkerState) -> bool:
+    if "your_turn" in obs:
+        return bool(obs.get("your_turn"))
+    turn_player = as_int(obs.get("turn_player"), default=0)
+    return worker_state.player_id is not None and turn_player == worker_state.player_id
 
 
-def is_empty_cell(cell: Any) -> bool:
-    if isinstance(cell, bool):
-        return False
-    if isinstance(cell, (int, float)):
-        return int(cell) == 0
-    if isinstance(cell, str):
-        trimmed = cell.strip()
-        return trimmed in {"", "0"}
-    return False
+def choose_action(obs: Dict[str, Any], worker_state: WorkerState) -> Optional[str]:
+    if normalized_name(worker_state.env) == "connect4":
+        legal = connect4_legal_columns(obs)
+        if legal:
+            return random.choice(legal)
+
+    legal_moves = obs.get("legal_moves")
+    if isinstance(legal_moves, list) and legal_moves:
+        return str(random.choice(legal_moves))
+
+    return None
 
 
-def handle_registered(payload: Dict[str, Any], worker_state: WorkerState) -> None:
-    worker_state.session_id = payload.get("session_id")
-    log("info", f"registered session_id={worker_state.session_id}")
+def handle_welcome(payload: Dict[str, Any], worker_state: WorkerState) -> None:
+    worker_state.session_id = as_int(payload.get("session_id"), default=0)
+    worker_state.arena_id = as_int(payload.get("arena_id"), default=0)
+    worker_state.player_id = as_int(payload.get("player_id"), default=0)
+    worker_state.env = str(payload.get("env") or "")
+    worker_state.effective_time_limit_ms = as_int(payload.get("effective_time_limit_ms"), default=0)
+    if worker_state.effective_time_limit_ms <= 0:
+        worker_state.effective_time_limit_ms = as_int(payload.get("time_limit_ms"), default=0)
 
-
-def handle_manifest(payload: Dict[str, Any], worker_state: WorkerState) -> None:
-    worker_state.arena_id = payload.get("arena_id")
-    worker_state.player_id = payload.get("player_id")
-    worker_state.game = str(payload.get("game") or "")
     log(
         "info",
-        f"manifest arena_id={worker_state.arena_id} player_id={worker_state.player_id} game={worker_state.game}",
+        (
+            f"welcome session_id={worker_state.session_id} arena_id={worker_state.arena_id} "
+            f"player_id={worker_state.player_id} env={worker_state.env} "
+            f"move_limit_ms={worker_state.effective_time_limit_ms}"
+        ),
     )
 
 
-def handle_state(payload: Dict[str, Any], worker_state: WorkerState) -> None:
-    if not is_our_turn(payload, worker_state):
+def handle_turn(payload: Dict[str, Any], worker_state: WorkerState) -> None:
+    if bool(payload.get("done")):
         return
 
-    move = choose_move(payload, worker_state)
-    if move is None:
+    obs = payload.get("obs")
+    if not isinstance(obs, dict):
         return
 
-    send_message("move", {"move": move})
-    log("info", f"submitted move={move}")
+    if not is_our_turn(obs, worker_state):
+        return
 
+    action = choose_action(obs, worker_state)
+    if action is None:
+        return
 
-def handle_event(payload: Dict[str, Any]) -> None:
-    name = payload.get("name")
-    log("info", f"event name={name}")
+    send_message("action", {"action": action})
 
 
 def main() -> int:
@@ -203,36 +181,12 @@ def main() -> int:
         if not isinstance(payload, dict):
             payload = {}
 
-        if msg_type == "hello":
-            send_message(
-                "hello_ack",
-                {
-                    "worker_name": "python_worker_template",
-                    "worker_version": "0.1.0",
-                    "language": "python",
-                },
-                msg.get("id"),
-            )
+        if msg_type == "welcome":
+            handle_welcome(payload, worker_state)
             continue
 
-        if msg_type == "registered":
-            handle_registered(payload, worker_state)
-            continue
-
-        if msg_type == "manifest":
-            handle_manifest(payload, worker_state)
-            continue
-
-        if msg_type == "state":
-            handle_state(payload, worker_state)
-            continue
-
-        if msg_type == "event":
-            handle_event(payload)
-            continue
-
-        if msg_type == "error":
-            log("error", f"agent error: {payload.get('message')}")
+        if msg_type == "turn":
+            handle_turn(payload, worker_state)
             continue
 
         if msg_type == "shutdown":

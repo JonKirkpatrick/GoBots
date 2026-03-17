@@ -1,0 +1,14 @@
+services:
+  bbs-server:
+    build:
+      context: ../..
+      dockerfile: deploy/truenas/Dockerfile.bbs-server
+    image: bbs-server:local
+    container_name: bbs-server
+    restart: unless-stopped
+    environment:
+      BBS_DASHBOARD_ADMIN_KEY: ${BBS_DASHBOARD_ADMIN_KEY}
+      TZ: ${TZ:-UTC}
+    ports:
+      - "${BBS_BOT_PORT:-8080}:8080"
+      - "${BBS_DASHBOARD_PORT:-3000}:3000"

@@ -1,14 +1,19 @@
-# bbs-agent (MVP)
+# bbs-agent (Minimal v0.2)
 
 `bbs-agent` is a local bridge process that:
 
 - launches a worker process
 - connects to the BBS TCP server
 - performs `REGISTER`
-- forwards server events/state to the worker
-- forwards worker `move`/`command` messages back to BBS
+- forwards only actionable `turn` messages to the worker
+- forwards worker `action` messages back as `MOVE`
 
-It implements the draft contract in `BBS_AGENT_CONTRACT.md`.
+It implements `BBS_AGENT_CONTRACT.md` v0.2.
+
+## Runtime Contract
+
+- Agent -> Worker: `welcome`, `turn`, `shutdown`
+- Worker -> Agent: `action`, `log`
 
 ## Quick Run (Python Worker Template)
 
@@ -32,5 +37,5 @@ Optional:
 ## Notes
 
 - The agent writes credentials to `<name>_credentials.txt` if the server issues a new identity during register.
-- The worker template derives Connect4 legal columns from `state.state_obj.board` and only emits a move when `your_turn`/`turn_player` indicates it should act.
+- Dashboard/admin flows remain server-side; worker protocol is focused on turn-time decisioning.
 - Current BBS transport is plain TCP; treat credentials and owner tokens as sensitive.

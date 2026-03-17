@@ -5,7 +5,7 @@ This folder contains an imported Fhourstones solver and a worker adapter that pl
 ## Files
 
 - `Game.c`, `TransGame.c`, `SearchGame.c` - original Fhourstones sources
-- `fhourstones_worker_contract.py` - worker that speaks `BBS_AGENT_CONTRACT.md`
+- `fhourstones_worker_contract.py` - worker for `BBS_AGENT_CONTRACT.md` v0.2 (`welcome`/`turn`/`action`)
 - `fhourstones` - solver binary (created by build step)
 
 ## Build Solver Binary
@@ -41,7 +41,7 @@ Optional:
 
 ## Behavior Notes
 
-- The worker only acts on `connect4` games.
+- The worker only acts on `connect4` environments.
 - It reconstructs a valid move history from board state and evaluates candidate columns with Fhourstones.
-- If solver calls time out, it falls back to a center-first legal move.
-- Lower timeout is safer for strict move clocks; higher timeout can improve move quality.
+- It uses a decision budget derived from `deadline_ms`/`effective_time_limit_ms` and preserves fallback headroom.
+- If solver calls time out or fail, it falls back to a center-first legal action.

@@ -20,8 +20,8 @@ import (
 )
 
 const (
-	contractVersion = "0.1"
-	agentVersion    = "0.1.0"
+	contractVersion = "0.2"
+	agentVersion    = "0.2.0"
 )
 
 type repeatedStringFlag []string
@@ -75,15 +75,24 @@ type agent struct {
 	workerStderr io.ReadCloser
 	workerMu     sync.Mutex
 
-	conn       net.Conn
-	serverMu   sync.Mutex
-	helloAckCh chan struct{}
+	conn     net.Conn
+	serverMu sync.Mutex
 
 	registerCh      chan serverMessage
 	serverErrCh     chan error
 	workerReadErrCh chan error
 
+	sessionID int
+
+	joinedArenaID  int
 	joinedPlayerID int
+	joinedGame     string
+	joinedTimeMS   int
+	joinedMoveMS   int
+	turnStep       int
+
+	lastStatePayload map[string]interface{}
+	pendingResponse  map[string]interface{}
 }
 
 func main() {
@@ -115,24 +124,6 @@ func run() int {
 		return 1
 	}
 
-	if err := ag.sendWorker(contractMessage{
-		V:    contractVersion,
-		Type: "hello",
-		Payload: map[string]interface{}{
-			"agent_name":    "bbs-agent",
-			"agent_version": agentVersion,
-			"server":        cfg.server,
-		},
-	}); err != nil {
-		fmt.Fprintf(os.Stderr, "[agent] failed to send hello to worker: %v\n", err)
-		return 1
-	}
-
-	if err := waitForHelloAck(ag.helloAckCh, cfg.helloTimeout); err != nil {
-		fmt.Fprintf(os.Stderr, "[agent] worker handshake failed: %v\n", err)
-		return 1
-	}
-
 	if err := ag.connectServer(); err != nil {
 		fmt.Fprintf(os.Stderr, "[agent] server connect failed: %v\n", err)
 		return 1
@@ -157,6 +148,7 @@ func run() int {
 	}
 
 	registerPayload, _ := registerMsg.Payload.(map[string]interface{})
+	ag.sessionID = asInt(registerPayload["session_id"])
 	if registerPayload != nil {
 		botID := asString(registerPayload["bot_id"])
 		botSecret := asString(registerPayload["bot_secret"])
@@ -169,18 +161,7 @@ func run() int {
 		}
 	}
 
-	registeredPayload := map[string]interface{}{
-		"session_id":      asNumber(registerPayload["session_id"]),
-		"bot_id":          asString(registerPayload["bot_id"]),
-		"is_new_identity": asBool(registerPayload["is_new_identity"]),
-		"auth_mode":       asString(registerPayload["authentication"]),
-	}
-	if err := ag.sendWorker(contractMessage{V: contractVersion, Type: "registered", Payload: registeredPayload}); err != nil {
-		fmt.Fprintf(os.Stderr, "[agent] failed to forward registered payload: %v\n", err)
-		return 1
-	}
-
-	fmt.Fprintln(os.Stderr, "[agent] ready: worker <-> server bridge active")
+	fmt.Fprintln(os.Stderr, "[agent] registered; waiting for JOIN to send worker welcome")
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
@@ -210,7 +191,6 @@ type runtimeConfig struct {
 	credentialsFile string
 	workerBin       string
 	workerArgs      []string
-	helloTimeout    time.Duration
 	registerTimeout time.Duration
 }
 
@@ -225,7 +205,6 @@ func parseFlags() (runtimeConfig, error) {
 	flag.StringVar(&cfg.credentialsFile, "credentials-file", "", "path to bot credentials file (key=value format)")
 	flag.StringVar(&cfg.workerBin, "worker", "", "worker executable path (required)")
 	flag.Var(&workerArgs, "worker-arg", "argument to pass to worker process (repeat flag for multiple args)")
-	flag.DurationVar(&cfg.helloTimeout, "hello-timeout", 8*time.Second, "worker hello_ack timeout")
 	flag.DurationVar(&cfg.registerTimeout, "register-timeout", 12*time.Second, "server register response timeout")
 
 	flag.Parse()
@@ -279,7 +258,6 @@ func newAgent(cfg runtimeConfig) (*agent, error) {
 		workerStdin:     stdin,
 		workerStdout:    stdout,
 		workerStderr:    stderr,
-		helloAckCh:      make(chan struct{}, 1),
 		registerCh:      make(chan serverMessage, 1),
 		serverErrCh:     make(chan error, 1),
 		workerReadErrCh: make(chan error, 1),
@@ -314,15 +292,6 @@ func (a *agent) connectServer() error {
 
 	go a.readServer()
 	return nil
-}
-
-func waitForHelloAck(ch <-chan struct{}, timeout time.Duration) error {
-	select {
-	case <-ch:
-		return nil
-	case <-time.After(timeout):
-		return fmt.Errorf("timeout waiting for hello_ack after %s", timeout)
-	}
 }
 
 func waitForRegister(ch <-chan serverMessage, timeout time.Duration) (serverMessage, error) {
@@ -375,56 +344,21 @@ func (a *agent) handleWorkerLine(line string) {
 
 	typeName := strings.ToLower(strings.TrimSpace(env.Type))
 	switch typeName {
-	case "hello_ack":
-		select {
-		case a.helloAckCh <- struct{}{}:
-		default:
-		}
-	case "move":
+	case "action":
 		var payload struct {
-			Move string `json:"move"`
+			Action string `json:"action"`
 		}
 		if err := json.Unmarshal(env.Payload, &payload); err != nil {
-			fmt.Fprintf(os.Stderr, "[agent] worker move payload parse error: %v\n", err)
+			fmt.Fprintf(os.Stderr, "[agent] worker action payload parse error: %v\n", err)
 			return
 		}
-		move := strings.TrimSpace(payload.Move)
-		if move == "" {
+		action := strings.TrimSpace(payload.Action)
+		if action == "" {
 			return
 		}
-		_ = a.sendServerCommand("MOVE " + move)
-	case "command":
-		var payload struct {
-			Text string `json:"text"`
-		}
-		if err := json.Unmarshal(env.Payload, &payload); err != nil {
-			fmt.Fprintf(os.Stderr, "[agent] worker command payload parse error: %v\n", err)
-			return
-		}
-		cmdText := strings.TrimSpace(payload.Text)
-		if cmdText == "" {
-			return
-		}
-		_ = a.sendServerCommand(cmdText)
-	case "set_profile":
-		var payload struct {
-			Name         string   `json:"name"`
-			Capabilities []string `json:"capabilities"`
-		}
-		if err := json.Unmarshal(env.Payload, &payload); err != nil {
-			fmt.Fprintf(os.Stderr, "[agent] worker set_profile payload parse error: %v\n", err)
-			return
-		}
-		if strings.TrimSpace(payload.Name) != "" {
-			_ = a.sendServerCommand("UPDATE name " + strings.TrimSpace(payload.Name))
-		}
-		for _, capability := range payload.Capabilities {
-			capability = strings.TrimSpace(capability)
-			if capability == "" {
-				continue
-			}
-			_ = a.sendServerCommand("UPDATE capability " + capability)
-		}
+		action = strings.ReplaceAll(action, "\n", "")
+		action = strings.ReplaceAll(action, "\r", "")
+		_ = a.sendServerCommand("MOVE " + action)
 	case "log":
 		var payload struct {
 			Level   string `json:"level"`
@@ -436,7 +370,7 @@ func (a *agent) handleWorkerLine(line string) {
 		}
 		fmt.Fprintf(os.Stderr, "[worker:%s] %s\n", strings.TrimSpace(payload.Level), strings.TrimSpace(payload.Message))
 	default:
-		fmt.Fprintf(os.Stderr, "[agent] ignoring unsupported worker message type=%s\n", env.Type)
+		fmt.Fprintf(os.Stderr, "[agent] ignoring unsupported worker message type=%s (expected action/log)\n", env.Type)
 	}
 }
 
@@ -463,14 +397,7 @@ func (a *agent) readServer() {
 func (a *agent) handleServerLine(line string) {
 	var msg serverMessage
 	if err := json.Unmarshal([]byte(line), &msg); err != nil {
-		_ = a.sendWorker(contractMessage{
-			V:    contractVersion,
-			Type: "event",
-			Payload: map[string]interface{}{
-				"name": "server_text",
-				"data": map[string]interface{}{"line": line},
-			},
-		})
+		fmt.Fprintf(os.Stderr, "[agent] server text: %s\n", line)
 		return
 	}
 
@@ -482,38 +409,118 @@ func (a *agent) handleServerLine(line string) {
 		case a.registerCh <- msg:
 		default:
 		}
+		return
 	}
 
 	switch msgType {
 	case "join":
 		if payloadMap, ok := msg.Payload.(map[string]interface{}); ok {
+			a.joinedArenaID = asInt(payloadMap["arena_id"])
 			a.joinedPlayerID = asInt(payloadMap["player_id"])
-			_ = a.sendWorker(contractMessage{V: contractVersion, Type: "manifest", Payload: payloadMap})
+			a.joinedGame = asString(payloadMap["game"])
+			a.joinedTimeMS = asInt(payloadMap["time_limit_ms"])
+			a.joinedMoveMS = asInt(payloadMap["effective_time_limit_ms"])
+			if a.joinedMoveMS <= 0 {
+				a.joinedMoveMS = a.joinedTimeMS
+			}
+			a.turnStep = 0
+			a.pendingResponse = nil
+			a.lastStatePayload = nil
+
+			welcome := map[string]interface{}{
+				"agent_name":              "bbs-agent",
+				"agent_version":           agentVersion,
+				"server":                  a.server,
+				"session_id":              a.sessionID,
+				"arena_id":                a.joinedArenaID,
+				"player_id":               a.joinedPlayerID,
+				"env":                     a.joinedGame,
+				"time_limit_ms":           a.joinedTimeMS,
+				"effective_time_limit_ms": a.joinedMoveMS,
+				"capabilities":            splitCapabilities(a.capabilities),
+			}
+			_ = a.sendWorker(contractMessage{V: contractVersion, Type: "welcome", Payload: welcome})
 		}
 	case "data":
 		statePayload := buildStatePayload(msg.Payload, a.joinedPlayerID)
-		_ = a.sendWorker(contractMessage{V: contractVersion, Type: "state", Payload: statePayload})
-	default:
-		eventPayload := map[string]interface{}{
-			"name": msgType,
-			"data": map[string]interface{}{
+		a.lastStatePayload = statePayload
+		if !shouldForwardTurn(statePayload, a.joinedPlayerID) {
+			return
+		}
+
+		a.turnStep++
+		turnPayload := map[string]interface{}{
+			"step":        a.turnStep,
+			"deadline_ms": a.joinedMoveMS,
+			"obs":         statePayload,
+			"reward":      0.0,
+			"done":        false,
+			"truncated":   false,
+		}
+		if a.pendingResponse != nil {
+			turnPayload["response"] = a.pendingResponse
+		}
+		a.pendingResponse = nil
+		_ = a.sendWorker(contractMessage{V: contractVersion, Type: "turn", Payload: turnPayload})
+	case "move", "error", "timeout", "ejected":
+		a.pendingResponse = map[string]interface{}{
+			"type":    msgType,
+			"status":  status,
+			"payload": msg.Payload,
+		}
+
+		if a.lastStatePayload != nil && shouldForwardTurn(a.lastStatePayload, a.joinedPlayerID) && status == "err" {
+			a.turnStep++
+			turnPayload := map[string]interface{}{
+				"step":        a.turnStep,
+				"deadline_ms": a.joinedMoveMS,
+				"obs":         a.lastStatePayload,
+				"reward":      0.0,
+				"done":        false,
+				"truncated":   false,
+				"response":    a.pendingResponse,
+			}
+			a.pendingResponse = nil
+			_ = a.sendWorker(contractMessage{V: contractVersion, Type: "turn", Payload: turnPayload})
+		}
+
+		if msgType == "timeout" || msgType == "ejected" {
+			a.turnStep++
+			terminalPayload := map[string]interface{}{
+				"step":      a.turnStep,
+				"reward":    0.0,
+				"done":      true,
+				"truncated": true,
+				"response":  a.pendingResponse,
+			}
+			if a.lastStatePayload != nil {
+				terminalPayload["obs"] = a.lastStatePayload
+			}
+			a.pendingResponse = nil
+			_ = a.sendWorker(contractMessage{V: contractVersion, Type: "turn", Payload: terminalPayload})
+		}
+	case "gameover":
+		a.turnStep++
+		terminalPayload := map[string]interface{}{
+			"step":      a.turnStep,
+			"reward":    0.0,
+			"done":      true,
+			"truncated": false,
+			"response": map[string]interface{}{
+				"type":    msgType,
 				"status":  status,
 				"payload": msg.Payload,
 			},
 		}
-		_ = a.sendWorker(contractMessage{V: contractVersion, Type: "event", Payload: eventPayload})
-	}
-
-	if status == "err" {
-		_ = a.sendWorker(contractMessage{
-			V:    contractVersion,
-			Type: "error",
-			Payload: map[string]interface{}{
-				"code":      msgType,
-				"message":   fmt.Sprintf("%v", msg.Payload),
-				"retryable": false,
-			},
-		})
+		if a.lastStatePayload != nil {
+			terminalPayload["obs"] = a.lastStatePayload
+		}
+		a.pendingResponse = nil
+		_ = a.sendWorker(contractMessage{V: contractVersion, Type: "turn", Payload: terminalPayload})
+	default:
+		if status == "err" {
+			fmt.Fprintf(os.Stderr, "[agent] server err type=%s payload=%v\n", msgType, msg.Payload)
+		}
 	}
 }
 
@@ -615,6 +622,33 @@ func buildRegisterCommand(name string, creds credentials, capabilitiesCSV, owner
 	}
 
 	return strings.Join(parts, " ")
+}
+
+func splitCapabilities(csv string) []string {
+	parts := strings.Split(csv, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		capability := strings.TrimSpace(part)
+		if capability == "" {
+			continue
+		}
+		out = append(out, capability)
+	}
+	return out
+}
+
+func shouldForwardTurn(statePayload map[string]interface{}, joinedPlayerID int) bool {
+	if joinedPlayerID <= 0 {
+		return true
+	}
+	if raw, ok := statePayload["your_turn"]; ok {
+		return asBool(raw)
+	}
+	turnPlayer := asInt(statePayload["turn_player"])
+	if turnPlayer > 0 {
+		return turnPlayer == joinedPlayerID
+	}
+	return true
 }
 
 func loadCredentials(path string) (credentials, error) {

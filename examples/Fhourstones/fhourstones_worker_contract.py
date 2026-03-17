@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Fhourstones-powered worker for BBS Agent Contract v0.1.
+"""Fhourstones-powered worker for BBS Agent Contract v0.2.
 
 This worker:
 - consumes contract messages from stdin
 - derives a legal move sequence from Connect4 board state
 - evaluates candidate moves with the Fhourstones solver binary
-- emits `move` back to bbs-agent
+- emits `action` back to bbs-agent
 
 If solver evaluation is unavailable or times out, it falls back to a legal move policy.
 """
@@ -16,11 +16,12 @@ import argparse
 import json
 import subprocess
 import sys
+import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-CONTRACT_VERSION = "0.1"
+CONTRACT_VERSION = "0.2"
 LOSS = 1
 DRAWLOSS = 2
 DRAW = 3
@@ -36,6 +37,7 @@ class WorkerState:
         self.game: str = ""
         self.solver_path = solver_path
         self.solve_timeout_seconds = solve_timeout_seconds
+        self.effective_time_limit_ms: int = 0
 
 
 def send_message(msg_type: str, payload: Dict[str, Any], msg_id: Optional[str] = None) -> None:
@@ -231,14 +233,34 @@ def evaluate_position_with_solver(solver_path: Path, move_sequence: str, timeout
     return parse_score_from_solver_output(stdout)
 
 
+def compute_decision_budget_seconds(worker_state: WorkerState) -> Optional[float]:
+    limit_ms = worker_state.effective_time_limit_ms
+    if limit_ms <= 0:
+        return None
+
+    limit_seconds = float(limit_ms) / 1000.0
+    # Keep a fixed reserve so fallback move + pipe/network overhead can still fit.
+    reserve_seconds = min(0.35, max(0.12, limit_seconds * 0.20))
+    return max(0.05, limit_seconds - reserve_seconds)
+
+
 def choose_move_with_fhourstones(state_payload: Dict[str, Any], worker_state: WorkerState) -> Optional[str]:
     board, turn = extract_board_and_turn(state_payload)
     if board is None or turn is None:
         return None
 
+    decision_budget_seconds = compute_decision_budget_seconds(worker_state)
+    decision_deadline_monotonic = (
+        time.monotonic() + decision_budget_seconds if decision_budget_seconds is not None else None
+    )
+
     sequence = reconstruct_move_sequence(board, turn)
     if sequence is None:
         log("warn", "failed to reconstruct move sequence; using fallback")
+        return choose_fallback_move(board)
+
+    if decision_deadline_monotonic is not None and time.monotonic() >= decision_deadline_monotonic:
+        log("warn", "decision budget exhausted before solver pass; using fallback")
         return choose_fallback_move(board)
 
     base_seq = encode_move_sequence(sequence)
@@ -246,16 +268,27 @@ def choose_move_with_fhourstones(state_payload: Dict[str, Any], worker_state: Wo
     if not legal:
         return None
 
+    # Under strict clocks, search center-first so partial search still tends to pick stronger moves.
+    legal.sort(key=lambda c: center_distance(c, len(board[0])))
+
     # Evaluate each candidate by asking solver to score the opponent-to-move position.
     # Lower opponent score is better for us (LOSS < DRAW < WIN from opponent perspective).
     scored: List[Tuple[int, int]] = []  # (score, col)
-    for col in legal:
+    for idx, col in enumerate(legal):
+        timeout_seconds = worker_state.solve_timeout_seconds
+        if decision_deadline_monotonic is not None:
+            remaining = decision_deadline_monotonic - time.monotonic()
+            if remaining <= 0.0:
+                break
+            remaining_candidates = len(legal) - idx
+            timeout_seconds = min(timeout_seconds, max(0.02, remaining / max(1, remaining_candidates)))
+
         cand = apply_move(board, col, worker_state.player_id or turn)
         if cand is None:
             continue
 
         candidate_sequence = base_seq + str(col + 1)
-        score = evaluate_position_with_solver(worker_state.solver_path, candidate_sequence, worker_state.solve_timeout_seconds)
+        score = evaluate_position_with_solver(worker_state.solver_path, candidate_sequence, timeout_seconds)
         if score is None:
             continue
         scored.append((score, col))
@@ -288,38 +321,48 @@ def is_our_turn(state_payload: Dict[str, Any], worker_state: WorkerState) -> boo
     return worker_state.player_id is not None and turn_player == worker_state.player_id
 
 
-def handle_registered(payload: Dict[str, Any], worker_state: WorkerState) -> None:
+def handle_welcome(payload: Dict[str, Any], worker_state: WorkerState) -> None:
     worker_state.session_id = as_int(payload.get("session_id"), default=0)
-    log("info", f"registered session_id={worker_state.session_id}")
-
-
-def handle_manifest(payload: Dict[str, Any], worker_state: WorkerState) -> None:
     worker_state.arena_id = as_int(payload.get("arena_id"), default=0)
     worker_state.player_id = as_int(payload.get("player_id"), default=0)
-    worker_state.game = str(payload.get("game") or "")
+    worker_state.game = str(payload.get("env") or payload.get("game") or "")
+    worker_state.effective_time_limit_ms = as_int(payload.get("effective_time_limit_ms"), default=0)
+    if worker_state.effective_time_limit_ms <= 0:
+        worker_state.effective_time_limit_ms = as_int(payload.get("time_limit_ms"), default=0)
     log(
         "info",
-        f"manifest arena_id={worker_state.arena_id} player_id={worker_state.player_id} game={worker_state.game}",
+        (
+            f"welcome session_id={worker_state.session_id} arena_id={worker_state.arena_id} "
+            f"player_id={worker_state.player_id} "
+            f"game={worker_state.game} move_limit_ms={worker_state.effective_time_limit_ms}"
+        ),
     )
 
 
-def handle_state(payload: Dict[str, Any], worker_state: WorkerState) -> None:
+def handle_turn(payload: Dict[str, Any], worker_state: WorkerState) -> None:
+    if bool(payload.get("done")):
+        return
+
+    obs = payload.get("obs")
+    if not isinstance(obs, dict):
+        return
+
+    deadline_ms = as_int(payload.get("deadline_ms"), default=0)
+    if deadline_ms > 0:
+        worker_state.effective_time_limit_ms = deadline_ms
+
     if normalized_game_name(worker_state.game) != "connect4":
         return
 
-    if not is_our_turn(payload, worker_state):
+    if not is_our_turn(obs, worker_state):
         return
 
-    move = choose_move_with_fhourstones(payload, worker_state)
+    move = choose_move_with_fhourstones(obs, worker_state)
     if move is None:
         return
 
-    send_message("move", {"move": move})
-    log("info", f"submitted move={move}")
-
-
-def handle_event(payload: Dict[str, Any]) -> None:
-    log("info", f"event name={payload.get('name')}")
+    send_message("action", {"action": move})
+    log("info", f"submitted action={move}")
 
 
 def ensure_solver_binary(solver_path: Path, source_dir: Path) -> bool:
@@ -396,36 +439,12 @@ def main(argv: Sequence[str]) -> int:
         if not isinstance(payload, dict):
             payload = {}
 
-        if msg_type == "hello":
-            send_message(
-                "hello_ack",
-                {
-                    "worker_name": "fhourstones_worker",
-                    "worker_version": "0.1.0",
-                    "language": "python",
-                },
-                msg.get("id"),
-            )
+        if msg_type == "welcome":
+            handle_welcome(payload, worker_state)
             continue
 
-        if msg_type == "registered":
-            handle_registered(payload, worker_state)
-            continue
-
-        if msg_type == "manifest":
-            handle_manifest(payload, worker_state)
-            continue
-
-        if msg_type == "state":
-            handle_state(payload, worker_state)
-            continue
-
-        if msg_type == "event":
-            handle_event(payload)
-            continue
-
-        if msg_type == "error":
-            log("error", f"agent error: {payload.get('message')}")
+        if msg_type == "turn":
+            handle_turn(payload, worker_state)
             continue
 
         if msg_type == "shutdown":
