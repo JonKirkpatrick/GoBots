@@ -151,7 +151,7 @@ The match viewer is served at `/viewer`:
 
 The replay viewer loads frame data from `/viewer/replay-data`, and the live viewer streams frame updates over `/viewer/live-sse`.
 
-For an always-on home-lab deployment, see `deploy/truenas/README.md`.
+For an always-on home-lab deployment, see `deploy/truenas/README.md` (Docker) or `deploy/truenas-no-docker/README.md` (no Docker).
 
 ## Quick Manual Test
 
