@@ -18,7 +18,7 @@ type Arena struct {
 	Player1Handicap   int                // Percentage adjustment for player 1's move clock (e.g., +20 => 20% more time)
 	Player2Handicap   int                // Percentage adjustment for player 2's move clock (e.g., -20 => 20% less time)
 	Status            string             // "waiting", "active", "completed"
-	RequiredPlayers   int                // Number of players needed before activation (1 or 2)
+	RequiredPlayers   int                // Number of players needed before activation (0, 1, or 2)
 	Game              games.GameInstance // The game instance (rulebook) for this arena
 	GameArgs          []string           // Initialization args used to construct Game (for replay fidelity)
 	TimeLimit         time.Duration      // Time limit per move

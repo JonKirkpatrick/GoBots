@@ -278,7 +278,7 @@ REGISTER &lt;name&gt; "" "" connect4 owner_token={{.OwnerToken}}</pre>
                         <dt>Game</dt>
                         <dd>{{.Game}}</dd>
                         <dt>Required Players</dt>
-                        <dd>{{if gt .RequiredPlayers 0}}{{.RequiredPlayers}}{{else}}2{{end}}</dd>
+                        <dd>{{if eq .RequiredPlayers 0}}0 (autonomous){{else}}{{.RequiredPlayers}}{{end}}</dd>
                         {{if .MoveClockEnabled}}
                             <dt>Time Limit</dt>
                             <dd>{{fmtSeconds .TimeLimitMS}}</dd>
@@ -288,7 +288,7 @@ REGISTER &lt;name&gt; "" "" connect4 owner_token={{.OwnerToken}}</pre>
                             {{end}}
                             <dt>P1 Move Limit</dt>
                             <dd>{{fmtSeconds .Bot1TimeMS}} ({{if ge .Player1Handicap 0}}+{{end}}{{.Player1Handicap}}%)</dd>
-                            {{if ne .RequiredPlayers 1}}
+                            {{if ge .RequiredPlayers 2}}
                                 <dt>P2 Move Limit</dt>
                                 <dd>{{fmtSeconds .Bot2TimeMS}} ({{if ge .Player2Handicap 0}}+{{end}}{{.Player2Handicap}}%)</dd>
                             {{end}}
@@ -309,10 +309,10 @@ REGISTER &lt;name&gt; "" "" connect4 owner_token={{.OwnerToken}}</pre>
                     </dl>
                     <div class="players">
                         <div>
-                            <strong>{{if eq .RequiredPlayers 1}}Agent{{else}}P1{{end}}:</strong>
-                            {{if .HasPlayer1}}{{.Player1Name}} (ID {{.Player1Session}}){{else}}<span class="muted">empty</span>{{end}}
+                            <strong>{{if eq .RequiredPlayers 0}}Mode{{else if eq .RequiredPlayers 1}}Agent{{else}}P1{{end}}:</strong>
+                            {{if eq .RequiredPlayers 0}}<span class="muted">autonomous (no player slots)</span>{{else if .HasPlayer1}}{{.Player1Name}} (ID {{.Player1Session}}){{else}}<span class="muted">empty</span>{{end}}
                         </div>
-                        {{if ne .RequiredPlayers 1}}
+                        {{if ge .RequiredPlayers 2}}
                             <div>
                                 <strong>P2:</strong>
                                 {{if .HasPlayer2}}{{.Player2Name}} (ID {{.Player2Session}}){{else}}<span class="muted">empty</span>{{end}}

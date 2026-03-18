@@ -143,7 +143,7 @@ func launchPluginGame(name, executable string, args []string) (GameInstance, err
 	if base.name == "" {
 		base.name = name
 	}
-	if base.requiredPlayers < 1 || base.requiredPlayers > 2 {
+	if base.requiredPlayers < 0 || base.requiredPlayers > 2 {
 		base.requiredPlayers = 2
 	}
 
@@ -184,7 +184,7 @@ func (p *processPluginGame) IsGameOver() (bool, string) {
 }
 
 func (p *processPluginGame) RequiredPlayers() int {
-	if p.requiredPlayers >= 1 && p.requiredPlayers <= 2 {
+	if p.requiredPlayers >= 0 && p.requiredPlayers <= 2 {
 		return p.requiredPlayers
 	}
 	return 2

@@ -289,7 +289,7 @@ func requiredPlayers(game Game) int {
 	}
 	if provider, ok := game.(PlayerCountProvider); ok {
 		value := provider.RequiredPlayers()
-		if value >= 1 && value <= 2 {
+		if value >= 0 && value <= 2 {
 			return value
 		}
 	}

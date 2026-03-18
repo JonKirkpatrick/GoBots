@@ -174,6 +174,8 @@ func (m *Manager) createArenaLocked(game games.GameInstance, gameArgs []string, 
 		allowHandicap = false
 	}
 
+	requiredPlayers := games.RequiredPlayers(game)
+
 	m.Arenas[id] = &Arena{
 		ID:                id,
 		Game:              game,
@@ -182,13 +184,18 @@ func (m *Manager) createArenaLocked(game games.GameInstance, gameArgs []string, 
 		MoveClockEnabled:  moveClockEnabled,
 		HandicapSupported: handicapSupported,
 		AllowHandicap:     allowHandicap,
-		RequiredPlayers:   games.RequiredPlayers(game),
+		RequiredPlayers:   requiredPlayers,
 		Status:            "waiting",
 		Observers:         make([]*Session, 0),
 		MoveHistory:       make([]MatchMove, 0),
 		CreatedAt:         time.Now(),
 		LastMove:          time.Now(),
 	}
+
+	if requiredPlayers == 0 {
+		m.activateArena(m.Arenas[id])
+	}
+
 	m.broadcastArenaListLocked()
 	return id
 }
@@ -219,8 +226,11 @@ func (m *Manager) joinArenaLocked(arenaID int, s *Session, handicap int) error {
 	}
 
 	requiredPlayers := arena.RequiredPlayers
-	if requiredPlayers <= 0 {
+	if requiredPlayers < 0 || requiredPlayers > 2 {
 		requiredPlayers = 2
+	}
+	if requiredPlayers == 0 {
+		return errors.New("arena does not accept player joins")
 	}
 
 	if arena.Player1 == nil {

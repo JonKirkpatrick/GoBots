@@ -126,7 +126,7 @@ Required gameplay interface (`games/pluginapi.Game`):
 
 Optional interfaces:
 
-- `PlayerCountProvider` for one-player environments (`RequiredPlayers() int`)
+- `PlayerCountProvider` for autonomous/one-player environments (`RequiredPlayers() int`, values `0`, `1`, or `2`)
 - `MoveClockPolicy` to disable move clock enforcement (`EnforceMoveClock() bool`)
 - `HandicapPolicy` to disable handicap controls (`SupportsHandicap() bool`)
 - `EpisodicGame` for episodic continuation (`AdvanceEpisode() ...`)

@@ -75,7 +75,7 @@ Concurrency model:
 
 Server logic depends on `games.GameInstance` plus optional policy interfaces:
 
-- `RequiredPlayers()` for one-player or two-player activation
+- `RequiredPlayers()` for zero-player, one-player, or two-player activation
 - `EnforceMoveClock()`
 - `SupportsHandicap()`
 - `AdvanceEpisode()` for episodic environments

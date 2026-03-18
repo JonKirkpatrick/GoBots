@@ -97,6 +97,7 @@ For games/environments that disable move clocks, time and handicap inputs are ig
 The platform supports both:
 
 - two-player arenas
+- zero-player arenas/environments (`RequiredPlayers() == 0`)
 - one-player arenas/environments (`RequiredPlayers() == 1`)
 
 Episodic environments can continue across terminal episodes when supported by game implementation.

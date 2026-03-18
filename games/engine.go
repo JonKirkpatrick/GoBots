@@ -38,13 +38,14 @@ type PlayerCountProvider interface {
 
 // RequiredPlayers returns how many players are required before an arena can
 // activate. Games that do not implement PlayerCountProvider default to 2.
+// Valid values are 0, 1, or 2.
 func RequiredPlayers(game GameInstance) int {
 	if game == nil {
 		return 2
 	}
 	if provider, ok := game.(PlayerCountProvider); ok {
 		required := provider.RequiredPlayers()
-		if required >= 1 && required <= 2 {
+		if required >= 0 && required <= 2 {
 			return required
 		}
 	}
