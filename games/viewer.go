@@ -1,10 +1,10 @@
 package games
 
 import (
-	"encoding/json"
-	"fmt"
-	"strconv"
 	"strings"
+
+	"github.com/JonKirkpatrick/bbs/games/connect4"
+	"github.com/JonKirkpatrick/bbs/games/gridworld"
 )
 
 // ViewerSpec describes a game board in renderer-friendly terms.
@@ -40,11 +40,92 @@ type ViewerAdapter interface {
 	FrameFromState(state string, moveIndex int, timestamp string) (ViewerFrame, error)
 }
 
+// adapterWrapper wraps game-specific adapters to satisfy ViewerAdapter interface.
+type adapterWrapper struct {
+	rawAdapter interface {
+		SpecFromState(string) (map[string]interface{}, error)
+		FrameFromState(string, int, string) (map[string]interface{}, error)
+	}
+}
+
+func (w adapterWrapper) SpecFromState(state string) (ViewerSpec, error) {
+	raw, err := w.rawAdapter.SpecFromState(state)
+	if err != nil {
+		return ViewerSpec{}, err
+	}
+	return mapToViewerSpec(raw), nil
+}
+
+func (w adapterWrapper) FrameFromState(state string, moveIndex int, timestamp string) (ViewerFrame, error) {
+	raw, err := w.rawAdapter.FrameFromState(state, moveIndex, timestamp)
+	if err != nil {
+		return ViewerFrame{}, err
+	}
+	return mapToViewerFrame(raw), nil
+}
+
+// mapToViewerSpec converts a map to ViewerSpec.
+func mapToViewerSpec(m map[string]interface{}) ViewerSpec {
+	spec := ViewerSpec{}
+	if v, ok := m["game"].(string); ok {
+		spec.Game = v
+	}
+	if v, ok := m["kind"].(string); ok {
+		spec.Kind = v
+	}
+	if v, ok := m["rows"].(int); ok {
+		spec.Rows = v
+	}
+	if v, ok := m["cols"].(int); ok {
+		spec.Cols = v
+	}
+	if v, ok := m["player_colors"].(map[string]string); ok {
+		spec.PlayerColors = v
+	}
+	return spec
+}
+
+// mapToViewerFrame converts a map to ViewerFrame.
+func mapToViewerFrame(m map[string]interface{}) ViewerFrame {
+	frame := ViewerFrame{}
+	if v, ok := m["move_index"].(int); ok {
+		frame.MoveIndex = v
+	}
+	if v, ok := m["turn_player"].(int); ok {
+		frame.TurnPlayer = v
+	}
+	if v, ok := m["tokens"].([]map[string]int); ok {
+		frame.Tokens = make([]ViewerToken, len(v))
+		for i, token := range v {
+			frame.Tokens[i] = ViewerToken{
+				Player: token["player"],
+				Row:    token["row"],
+				Col:    token["col"],
+			}
+		}
+	}
+	if v, ok := m["timestamp"].(string); ok {
+		frame.Timestamp = v
+	}
+	if v, ok := m["is_terminal"].(bool); ok {
+		frame.IsTerminal = v
+	}
+	if v, ok := m["winner"].(string); ok {
+		frame.Winner = v
+	}
+	if v, ok := m["raw_state"].(string); ok {
+		frame.RawState = v
+	}
+	return frame
+}
+
 // GetViewerAdapter resolves a viewer adapter by game name.
 func GetViewerAdapter(gameName string) (ViewerAdapter, bool) {
 	switch strings.ToLower(strings.TrimSpace(gameName)) {
 	case "connect4":
-		return connect4ViewerAdapter{}, true
+		return adapterWrapper{connect4.GetViewerAdapter()}, true
+	case "gridworld":
+		return adapterWrapper{gridworld.GetViewerAdapter()}, true
 	default:
 		return nil, false
 	}
@@ -52,81 +133,5 @@ func GetViewerAdapter(gameName string) (ViewerAdapter, bool) {
 
 // InferConnect4ArgsFromState extracts rows/cols from serialized connect4 state.
 func InferConnect4ArgsFromState(state string) ([]string, error) {
-	parsed, err := parseConnect4State(state)
-	if err != nil {
-		return nil, err
-	}
-	if len(parsed.Board) == 0 || len(parsed.Board[0]) == 0 {
-		return nil, fmt.Errorf("connect4 state board is empty")
-	}
-
-	return []string{
-		strconv.Itoa(len(parsed.Board)),
-		strconv.Itoa(len(parsed.Board[0])),
-	}, nil
-}
-
-type connect4State struct {
-	Board [][]int `json:"board"`
-	Turn  int     `json:"turn"`
-}
-
-type connect4ViewerAdapter struct{}
-
-func (connect4ViewerAdapter) SpecFromState(state string) (ViewerSpec, error) {
-	parsed, err := parseConnect4State(state)
-	if err != nil {
-		return ViewerSpec{}, err
-	}
-
-	rows := len(parsed.Board)
-	cols := 0
-	if rows > 0 {
-		cols = len(parsed.Board[0])
-	}
-
-	return ViewerSpec{
-		Game: "connect4",
-		Kind: "connect4-grid",
-		Rows: rows,
-		Cols: cols,
-		PlayerColors: map[string]string{
-			"1": "#ef476f",
-			"2": "#ffd166",
-		},
-	}, nil
-}
-
-func (connect4ViewerAdapter) FrameFromState(state string, moveIndex int, timestamp string) (ViewerFrame, error) {
-	parsed, err := parseConnect4State(state)
-	if err != nil {
-		return ViewerFrame{}, err
-	}
-
-	tokens := make([]ViewerToken, 0)
-	for r := range parsed.Board {
-		for c := range parsed.Board[r] {
-			player := parsed.Board[r][c]
-			if player == 0 {
-				continue
-			}
-			tokens = append(tokens, ViewerToken{Player: player, Row: r, Col: c})
-		}
-	}
-
-	return ViewerFrame{
-		MoveIndex:  moveIndex,
-		TurnPlayer: parsed.Turn,
-		Tokens:     tokens,
-		Timestamp:  timestamp,
-		RawState:   state,
-	}, nil
-}
-
-func parseConnect4State(state string) (connect4State, error) {
-	var parsed connect4State
-	if err := json.Unmarshal([]byte(state), &parsed); err != nil {
-		return connect4State{}, fmt.Errorf("invalid connect4 state: %w", err)
-	}
-	return parsed, nil
+	return connect4.InferArgsFromState(state)
 }

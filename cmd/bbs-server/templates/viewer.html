@@ -234,6 +234,62 @@
                 grid-template-columns: 1fr;
             }
         }
+
+        /* ── Gridworld Viewer Styles ────────────────────────── */
+        .gridworld-container {
+            display: grid;
+            gap: 0.5rem;
+        }
+
+        .reward-graph-wrap {
+            border: 1px solid var(--line);
+            background: white;
+            padding: 0.5rem;
+            height: 200px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .reward-graph-title {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: #555;
+            margin: 0 0 0.3rem 0;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        #reward-graph {
+            flex: 1;
+            border: 1px solid var(--line);
+            background: #fafafa;
+        }
+
+        .gridworld-stats {
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 0.78rem;
+            border: 1px solid var(--line);
+            background: white;
+            padding: 0.4rem;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.3rem;
+            row-gap: 0.2rem;
+        }
+
+        .gridworld-stat-row {
+            display: contents;
+        }
+
+        .gridworld-stat-label {
+            color: #665;
+            font-weight: 500;
+        }
+
+        .gridworld-stat-value {
+            color: var(--ink);
+            text-align: right;
+        }
     </style>
 </head>
 <body>
@@ -261,6 +317,33 @@
 
             <div class="controls">
                 <div id="player-cards" class="player-cards"></div>
+                
+                <!-- Gridworld-specific controls -->
+                <div id="gridworld-section" style="display: none;" class="gridworld-container">
+                    <div class="reward-graph-wrap">
+                        <p class="reward-graph-title">Reward per Episode</p>
+                        <canvas id="reward-graph" width="280" height="160"></canvas>
+                    </div>
+                    <div class="gridworld-stats">
+                        <div class="gridworld-stat-row">
+                            <span class="gridworld-stat-label">Episode:</span>
+                            <span class="gridworld-stat-value" id="gw-episode">-</span>
+                        </div>
+                        <div class="gridworld-stat-row">
+                            <span class="gridworld-stat-label">Steps:</span>
+                            <span class="gridworld-stat-value" id="gw-steps">-</span>
+                        </div>
+                        <div class="gridworld-stat-row">
+                            <span class="gridworld-stat-label">Wins:</span>
+                            <span class="gridworld-stat-value" id="gw-wins">-</span>
+                        </div>
+                        <div class="gridworld-stat-row">
+                            <span class="gridworld-stat-label">Losses:</span>
+                            <span class="gridworld-stat-value" id="gw-losses">-</span>
+                        </div>
+                    </div>
+                </div>
+                
                 <p id="mode-hint" class="hint"></p>
                 <div class="control-row">
                     <button id="step-back" type="button">Step -</button>
@@ -308,6 +391,9 @@
         let playTimer = null;
         let autoFollowLive = true;
         let knownPlayers = [];
+        let gridworldHeatmap = {}; // tracks visit counts by "row,col"
+        let gridworldRewards = []; // tracks reward per episode [{ episode, reward }]
+        let gridworldMeta = null; // stores latest gridworld metadata
 
         // ── Participant card helpers ────────────────────────────
         function escapeHtml(str) {
@@ -421,9 +507,16 @@
             }
 
             const frame = frames[currentIndex];
+            const gwSection = document.getElementById("gridworld-section");
+            
             if (spec.kind === "connect4-grid") {
+                if (gwSection) gwSection.style.display = "none";
                 renderConnect4(spec, frame);
+            } else if (spec.kind === "gridworld-heatmap") {
+                if (gwSection) gwSection.style.display = "grid";
+                renderGridworld(spec, frame);
             } else {
+                if (gwSection) gwSection.style.display = "none";
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
                 ctx.fillStyle = "#1f2937";
                 ctx.font = "16px IBM Plex Mono";
@@ -485,6 +578,258 @@
                 ctx.strokeStyle = "#1f2937";
                 ctx.stroke();
             });
+        }
+
+        /**
+         * Parse gridworld metadata from frame.raw_state (which contains JSON metadata).
+         */
+        function parseGridworldMeta(rawState) {
+            try {
+                return JSON.parse(rawState);
+            } catch (_) {
+                return null;
+            }
+        }
+
+        /**
+         * Interpolate color between white, yellow, orange, red based on value [0, 1].
+         */
+        function heatmapColor(value) {
+            // value: 0 = white, 0.33 = yellow, 0.66 = orange, 1 = red
+            if (value <= 0) {
+                return "#ffffff";
+            }
+            if (value < 0.33) {
+                // white to yellow
+                const t = value / 0.33;
+                const r = 255;
+                const g = 255;
+                const b = Math.round(255 * (1 - t));
+                return `rgb(${r},${g},${b})`;
+            } else if (value < 0.66) {
+                // yellow to orange
+                const t = (value - 0.33) / 0.33;
+                const r = 255;
+                const g = Math.round(255 * (1 - t * 0.5));
+                const b = 0;
+                return `rgb(${r},${g},${b})`;
+            } else {
+                // orange to red
+                const t = (value - 0.66) / 0.34;
+                const r = 255;
+                const g = Math.round(255 * (0.5 - t * 0.5));
+                const b = 0;
+                return `rgb(${r},${g},${b})`;
+            }
+        }
+
+        /**
+         * Render gridworld heatmap with visit counts and special cells.
+         */
+        function renderGridworld(spec, frame) {
+            const meta = parseGridworldMeta(frame.raw_state);
+            if (!meta || !meta.grid) {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = "#1f2937";
+                ctx.font = "16px IBM Plex Mono";
+                ctx.fillText("Error: Invalid gridworld frame data", 20, 40);
+                return;
+            }
+
+            gridworldMeta = meta;
+
+            const rows = meta.grid.length || 1;
+            const cols = (meta.grid[0] && meta.grid[0].length) || 1;
+            const cell = Math.max(20, Math.floor(700 / Math.max(cols, 8)));
+            const pad = 18;
+            const boardW = cols * cell;
+            const boardH = rows * cell;
+            canvas.width = boardW + pad * 2 + 4;
+            canvas.height = boardH + pad * 2 + 4;
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Find max visit count for normalization
+            let maxVisits = 1;
+            Object.values(gridworldHeatmap).forEach(count => {
+                if (count > maxVisits) maxVisits = count;
+            });
+
+            // Render cells with heatmap
+            for (let r = 0; r < rows; r++) {
+                for (let c = 0; c < cols; c++) {
+                    const x = pad + c * cell;
+                    const y = pad + r * cell;
+                    const cellType = meta.grid[r][c];
+                    const visitKey = `${r},${c}`;
+                    const visitCount = gridworldHeatmap[visitKey] || 0;
+                    const visitNorm = Math.min(1, visitCount / maxVisits);
+
+                    // Draw heatmap background
+                    ctx.fillStyle = heatmapColor(visitNorm);
+                    ctx.fillRect(x, y, cell, cell);
+
+                    // Draw cell borders
+                    ctx.strokeStyle = "#ddd";
+                    ctx.lineWidth = 0.5;
+                    ctx.strokeRect(x, y, cell, cell);
+
+                    // Draw special cell indicators
+                    if (cellType === 1) { // Wall
+                        ctx.fillStyle = "#333";
+                        ctx.fillRect(x + 2, y + 2, cell - 4, cell - 4);
+                    } else if (cellType === 2) { // Start
+                        ctx.fillStyle = "#4ade80";
+                        ctx.beginPath();
+                        ctx.arc(x + cell / 2, y + cell / 2, cell * 0.3, 0, Math.PI * 2);
+                        ctx.fill();
+                    } else if (cellType === 3) { // Goal
+                        ctx.fillStyle = "#f59e0b";
+                        ctx.beginPath();
+                        ctx.moveTo(x + cell / 2, y + cell * 0.2);
+                        ctx.lineTo(x + cell * 0.8, y + cell * 0.8);
+                        ctx.lineTo(x + cell * 0.2, y + cell * 0.8);
+                        ctx.closePath();
+                        ctx.fill();
+                    } else if (cellType === 4) { // Pit
+                        ctx.fillStyle = "#ef4444";
+                        const r = cell * 0.35;
+                        ctx.beginPath();
+                        ctx.arc(x + cell / 2, y + cell / 2, r, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.strokeStyle = "#991b1b";
+                        ctx.lineWidth = 1.5;
+                        ctx.stroke();
+                    }
+                }
+            }
+
+            // Draw agent position
+            if (meta.agent_pos) {
+                const ax = pad + meta.agent_pos.col * cell + cell / 2;
+                const ay = pad + meta.agent_pos.row * cell + cell / 2;
+                ctx.fillStyle = "#0b7285";
+                ctx.beginPath();
+                ctx.arc(ax, ay, cell * 0.25, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.strokeStyle = "#fff";
+                ctx.lineWidth = 1.5;
+                ctx.stroke();
+            }
+
+            // Update gridworld stats
+            updateGridworldStats(meta);
+
+            // Update visit count for current agent position
+            if (meta.agent_pos) {
+                const visitKey = `${meta.agent_pos.row},${meta.agent_pos.col}`;
+                gridworldHeatmap[visitKey] = (gridworldHeatmap[visitKey] || 0) + 1;
+            }
+
+            // Track rewards on terminal state
+            if (meta.terminal && frame.is_terminal) {
+                const lastRewardEntry = gridworldRewards.find(r => r.episode === meta.episode);
+                if (!lastRewardEntry) {
+                    gridworldRewards.push({
+                        episode: meta.episode,
+                        reward: meta.reward
+                    });
+                    renderRewardGraph();
+                }
+            }
+        }
+
+        /**
+         * Update gridworld statistics display.
+         */
+        function updateGridworldStats(meta) {
+            if (!meta) return;
+            const gwSection = document.getElementById("gridworld-section");
+            if (!gwSection || gwSection.style.display === "none") return;
+
+            document.getElementById("gw-episode").textContent = meta.episode + " / " + meta.episode_total;
+            document.getElementById("gw-steps").textContent = meta.step + " / " + meta.max_steps;
+            document.getElementById("gw-wins").textContent = meta.episode_wins || "0";
+            document.getElementById("gw-losses").textContent = meta.episode_losses || "0";
+        }
+
+        /**
+         * Render reward graph using canvas.
+         */
+        function renderRewardGraph() {
+            const canvas = document.getElementById("reward-graph");
+            if (!canvas) return;
+            const ctx = canvas.getContext("2d");
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            if (gridworldRewards.length === 0) {
+                ctx.fillStyle = "#999";
+                ctx.font = "12px IBM Plex Mono";
+                ctx.fillText("No episode data yet", 10, canvas.height / 2);
+                return;
+            }
+
+            const padding = 25;
+            const graphWidth = canvas.width - padding * 2;
+            const graphHeight = canvas.height - padding * 2;
+
+            // Draw axes
+            ctx.strokeStyle = "#999";
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(padding, canvas.height - padding);
+            ctx.lineTo(canvas.width - padding, canvas.height - padding);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(padding, padding);
+            ctx.lineTo(padding, canvas.height - padding);
+            ctx.stroke();
+
+            // Plot rewards
+            if (gridworldRewards.length > 1) {
+                ctx.strokeStyle = "#3b82f6";
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                gridworldRewards.forEach((entry, idx) => {
+                    const x = padding + (idx / (gridworldRewards.length - 1)) * graphWidth;
+                    const y = canvas.height - padding - ((entry.reward + 1) / 2) * graphHeight; // normalize -1 to 1 to 0 to 1
+                    if (idx === 0) {
+                        ctx.moveTo(x, y);
+                    } else {
+                        ctx.lineTo(x, y);
+                    }
+                });
+                ctx.stroke();
+
+                // Plot points
+                ctx.fillStyle = "#ef4444";
+                gridworldRewards.forEach((entry, idx) => {
+                    const x = padding + (idx / (gridworldRewards.length - 1)) * graphWidth;
+                    const y = canvas.height - padding - ((entry.reward + 1) / 2) * graphHeight;
+                    ctx.beginPath();
+                    ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+                    ctx.fill();
+                });
+            } else if (gridworldRewards.length === 1) {
+                const entry = gridworldRewards[0];
+                const x = padding + graphWidth / 2;
+                const y = canvas.height - padding - ((entry.reward + 1) / 2) * graphHeight;
+                ctx.fillStyle = "#ef4444";
+                ctx.beginPath();
+                ctx.arc(x, y, 3, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            // Draw axis labels
+            ctx.fillStyle = "#666";
+            ctx.font = "10px IBM Plex Mono";
+            ctx.textAlign = "center";
+            ctx.fillText("Episodes", canvas.width / 2, canvas.height - 5);
+            ctx.save();
+            ctx.translate(8, canvas.height / 2);
+            ctx.rotate(-Math.PI / 2);
+            ctx.fillText("Reward", 0, 0);
+            ctx.restore();
         }
 
         function step(delta) {

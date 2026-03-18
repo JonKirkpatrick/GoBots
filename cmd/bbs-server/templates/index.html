@@ -399,6 +399,30 @@
             font-weight: 600;
         }
 
+        .arena-runtime-hint {
+            min-height: 1rem;
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 0.76rem;
+            color: #415a77;
+        }
+
+        .arena-args {
+            display: grid;
+            gap: 0.4rem;
+            margin-bottom: 0.1rem;
+        }
+
+        .arena-arg-row {
+            display: grid;
+            gap: 0.25rem;
+        }
+
+        .arena-arg-help {
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 0.74rem;
+            color: #4d5f79;
+        }
+
         .admin-result {
             margin-top: 0.75rem;
             border: 1px solid;
@@ -615,6 +639,19 @@
     </div>
 
     <script>
+        const BBS_GAME_CATALOG = {{.GameCatalogJSON}};
+        const BBS_GAME_BY_NAME = (function () {
+            const entries = new Map();
+            if (Array.isArray(BBS_GAME_CATALOG)) {
+                BBS_GAME_CATALOG.forEach(function (entry) {
+                    if (entry && typeof entry.name === "string") {
+                        entries.set(entry.name, entry);
+                    }
+                });
+            }
+            return entries;
+        })();
+
         async function copyTextValue(text) {
             if (navigator.clipboard && navigator.clipboard.writeText) {
                 await navigator.clipboard.writeText(text);
@@ -653,6 +690,149 @@
             }, 2200);
         }
 
+        function buildArgField(arg) {
+            const row = document.createElement("div");
+            row.className = "arena-arg-row";
+
+            const label = document.createElement("label");
+            label.textContent = arg.label || arg.key;
+            row.appendChild(label);
+
+            const input = document.createElement("input");
+            input.type = arg.input_type || "text";
+            input.setAttribute("data-arg-key", arg.key || "");
+            if (arg.placeholder) {
+                input.placeholder = arg.placeholder;
+            }
+            if (arg.default_value) {
+                input.value = arg.default_value;
+            }
+            if (arg.required) {
+                input.required = true;
+            }
+            if (input.type === "number") {
+                input.step = "1";
+            }
+            row.appendChild(input);
+
+            if (arg.help) {
+                const help = document.createElement("div");
+                help.className = "arena-arg-help";
+                help.textContent = arg.help;
+                row.appendChild(help);
+            }
+
+            return row;
+        }
+
+        function syncGameArgsField(form) {
+            if (!form) {
+                return;
+            }
+
+            const argsContainer = form.querySelector('[data-role="arena-args"]');
+            const hiddenArgs = form.querySelector('[data-role="game-args"]');
+            if (!argsContainer || !hiddenArgs) {
+                return;
+            }
+
+            const parts = [];
+            const fields = argsContainer.querySelectorAll("input[data-arg-key]");
+            fields.forEach(function (field) {
+                const key = (field.getAttribute("data-arg-key") || "").trim();
+                if (!key) {
+                    return;
+                }
+
+                const value = (field.value || "").trim();
+                if (!value) {
+                    return;
+                }
+
+                parts.push(key + "=" + value);
+            });
+
+            hiddenArgs.value = parts.join(" ");
+        }
+
+        function updateRuntimeControls(form, gameSpec) {
+            const timeInput = form.querySelector('[data-role="time-ms"]');
+            const handicapSelect = form.querySelector('[data-role="allow-handicap"]');
+            const runtimeHint = form.querySelector('[data-role="arena-runtime-hint"]');
+
+            if (!gameSpec) {
+                if (runtimeHint) {
+                    runtimeHint.textContent = "";
+                }
+                return;
+            }
+
+            if (timeInput) {
+                timeInput.disabled = !gameSpec.supports_move_clock;
+                timeInput.placeholder = gameSpec.supports_move_clock ? "default 1000" : "disabled for this game";
+                if (!gameSpec.supports_move_clock) {
+                    timeInput.value = "";
+                }
+            }
+
+            if (handicapSelect) {
+                handicapSelect.disabled = !gameSpec.supports_handicap;
+                if (!gameSpec.supports_handicap) {
+                    handicapSelect.value = "";
+                }
+            }
+
+            if (runtimeHint) {
+                if (!gameSpec.supports_move_clock) {
+                    runtimeHint.textContent = "Move clock and handicap are disabled for this game.";
+                } else if (!gameSpec.supports_handicap) {
+                    runtimeHint.textContent = "Move clock is supported; handicap is not used by this game.";
+                } else {
+                    runtimeHint.textContent = "Move clock and handicap settings are available.";
+                }
+            }
+        }
+
+        function renderArenaArgFields(form, gameSpec) {
+            const argsContainer = form.querySelector('[data-role="arena-args"]');
+            if (!argsContainer) {
+                return;
+            }
+
+            argsContainer.innerHTML = "";
+            if (!gameSpec || !Array.isArray(gameSpec.args) || gameSpec.args.length === 0) {
+                syncGameArgsField(form);
+                return;
+            }
+
+            gameSpec.args.forEach(function (arg) {
+                argsContainer.appendChild(buildArgField(arg));
+            });
+
+            syncGameArgsField(form);
+        }
+
+        function applyArenaCreateFormConfig(form) {
+            const select = form.querySelector('[data-role="game-select"]');
+            if (!select) {
+                return;
+            }
+
+            const selectedGame = (select.value || "").trim();
+            const gameSpec = BBS_GAME_BY_NAME.get(selectedGame) || null;
+
+            renderArenaArgFields(form, gameSpec);
+            updateRuntimeControls(form, gameSpec);
+            syncGameArgsField(form);
+        }
+
+        function initializeArenaCreateForms(root) {
+            const forms = root.querySelectorAll('form[data-role="arena-create-form"]');
+            forms.forEach(function (form) {
+                applyArenaCreateFormConfig(form);
+            });
+        }
+
         document.body.addEventListener("click", function (event) {
             const button = event.target.closest(".copy-button[data-copy-text]");
             if (!button) {
@@ -668,9 +848,51 @@
                 });
         });
 
+        document.body.addEventListener("change", function (event) {
+            const gameSelect = event.target.closest('select[data-role="game-select"]');
+            if (gameSelect) {
+                const form = gameSelect.closest('form[data-role="arena-create-form"]');
+                if (form) {
+                    applyArenaCreateFormConfig(form);
+                }
+                return;
+            }
+
+            const argInput = event.target.closest('input[data-arg-key]');
+            if (argInput) {
+                const form = argInput.closest('form[data-role="arena-create-form"]');
+                syncGameArgsField(form);
+            }
+        });
+
+        document.body.addEventListener("input", function (event) {
+            const argInput = event.target.closest('input[data-arg-key]');
+            if (!argInput) {
+                return;
+            }
+
+            const form = argInput.closest('form[data-role="arena-create-form"]');
+            syncGameArgsField(form);
+        });
+
+        document.body.addEventListener("submit", function (event) {
+            const form = event.target.closest('form[data-role="arena-create-form"]');
+            if (!form) {
+                return;
+            }
+
+            syncGameArgsField(form);
+        });
+
+        document.body.addEventListener("htmx:afterSwap", function () {
+            initializeArenaCreateForms(document);
+        });
+
         document.body.addEventListener("htmx:sseError", function () {
             console.warn("Dashboard SSE disconnected or errored");
         });
+
+        initializeArenaCreateForms(document);
     </script>
  </body>
 </html>

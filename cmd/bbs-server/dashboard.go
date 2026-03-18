@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/subtle"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"net"
@@ -29,6 +30,7 @@ type dashboardIndexData struct {
 	OwnerToken       string
 	SSEQuery         string
 	DashboardVersion string
+	GameCatalogJSON  template.JS
 }
 
 type dashboardStateView struct {
@@ -42,6 +44,7 @@ type dashboardStateView struct {
 	BotHost         string
 	BotPort         string
 	BotEndpoint     string
+	GameCatalog     []games.GameCatalogEntry
 }
 
 func initDashboard() {
@@ -176,6 +179,14 @@ func dashboardBotEndpoint(r *http.Request) string {
 	return net.JoinHostPort(dashboardBotHost(r), botServerPort)
 }
 
+func marshalJSONForTemplate(value interface{}) template.JS {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return template.JS("[]")
+	}
+	return template.JS(encoded)
+}
+
 func buildDashboardStateView(r *http.Request, snapshot stadium.ManagerSnapshot, adminKey, ownerToken string) dashboardStateView {
 	view := dashboardStateView{
 		Snapshot:        snapshot,
@@ -186,6 +197,7 @@ func buildDashboardStateView(r *http.Request, snapshot stadium.ManagerSnapshot, 
 		BotHost:         dashboardBotHost(r),
 		BotPort:         botServerPort,
 		BotEndpoint:     dashboardBotEndpoint(r),
+		GameCatalog:     games.AvailableGameCatalog(),
 	}
 
 	if ownerToken != "" {
@@ -258,6 +270,7 @@ func handleDashboardSSE(w http.ResponseWriter, r *http.Request) {
 func handleIndex(w http.ResponseWriter, r *http.Request) {
 	adminKey := r.URL.Query().Get("admin_key")
 	ownerToken := ownerTokenFromRequest(r)
+	catalog := games.AvailableGameCatalog()
 	data := dashboardIndexData{
 		AdminConfigured:  dashboardAdminKey() != "",
 		IsAdmin:          isAdminAuthorized(adminKey),
@@ -265,6 +278,7 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 		OwnerToken:       ownerToken,
 		SSEQuery:         dashboardSSEQuery(adminKey, ownerToken),
 		DashboardVersion: currentDashboardVersion(),
+		GameCatalogJSON:  marshalJSONForTemplate(catalog),
 	}
 	dashTemplates.ExecuteTemplate(w, "index.html", data)
 }
@@ -323,7 +337,7 @@ func handleOwnerCreateArena(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	gameType := strings.TrimSpace(r.FormValue("game"))
+	gameType := strings.ToLower(strings.TrimSpace(r.FormValue("game")))
 	if gameType == "" {
 		w.WriteHeader(http.StatusBadRequest)
 		renderActionResult(w, false, "Game type is required.")
@@ -551,7 +565,7 @@ func handleAdminCreateArena(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	gameType := strings.TrimSpace(r.FormValue("game"))
+	gameType := strings.ToLower(strings.TrimSpace(r.FormValue("game")))
 	if gameType == "" {
 		w.WriteHeader(http.StatusBadRequest)
 		renderActionResult(w, false, "Game type is required.")

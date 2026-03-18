@@ -123,9 +123,6 @@ func handleBot(conn net.Conn) {
 
 	// Display the banner
 	conn.Write([]byte(WelcomeBanner))
-
-	// A quick pause adds to the "connection" feel.  I may remove it or make it configurable later.
-	time.Sleep(100 * time.Millisecond)
 	conn.Write([]byte("\nWelcome to the Build-a-Bot Stadium!"))
 	conn.Write([]byte("\nType HELP at any time for a command list.\n\n"))
 	scanner := bufio.NewScanner(conn)
@@ -279,6 +276,8 @@ func handleBot(conn net.Conn) {
 				sess.CurrentArena.NotifyAll("update", "Player "+strconv.Itoa(sess.PlayerID)+" moved to "+parts[1])
 
 				// Pro-tip: Send the updated game state to everyone immediately
+				// This was added because of earlier problems where bots would effectively
+				// get stuck thinking they were in an arena after a game was already over.
 				state := sess.CurrentArena.Game.GetState()
 				sess.CurrentArena.NotifyAll("data", state)
 
@@ -341,7 +340,6 @@ func handleBot(conn net.Conn) {
 				conn.Write([]byte("ERR: " + err.Error() + "\n"))
 			} else {
 				conn.Write([]byte("OK: Watching match " + parts[1] + "\n"))
-				// Optional: Send current game state immediately upon joining
 				state := sess.CurrentArena.Game.GetState()
 				conn.Write([]byte("DATA: \n" + state + "\n"))
 			}

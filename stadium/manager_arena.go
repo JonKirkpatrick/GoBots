@@ -59,6 +59,7 @@ func (m *Manager) StartWatchdog() {
 func (m *Manager) terminateArena(id int, reason string) {
 	if arena, ok := m.Arenas[id]; ok {
 		arena.NotifyAll("error", reason)
+		_ = games.CloseGame(arena.Game)
 		delete(m.Arenas, id)
 		m.broadcastArenaListLocked()
 	}
@@ -68,6 +69,9 @@ func (m *Manager) terminateArena(id int, reason string) {
 func (m *Manager) DestroyArena(id int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if arena, ok := m.Arenas[id]; ok {
+		_ = games.CloseGame(arena.Game)
+	}
 	delete(m.Arenas, id)
 	m.broadcastArenaListLocked()
 }

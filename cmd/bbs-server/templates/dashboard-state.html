@@ -69,21 +69,26 @@ REGISTER &lt;name&gt; "" "" connect4 owner_token={{.OwnerToken}}</pre>
 
             {{if .OwnerConnected}}
                 <div class="admin-actions">
-                    <form class="admin-action" hx-post="/owner/create-arena" hx-target="#owner-result" hx-swap="innerHTML">
+                    <form class="admin-action" data-role="arena-create-form" hx-post="/owner/create-arena" hx-target="#owner-result" hx-swap="innerHTML">
                         <input type="hidden" name="owner_token" value="{{.OwnerToken}}" />
                         <h3>Create Arena</h3>
                         <label>Game</label>
-                        <input type="text" name="game" value="connect4" required />
+                        <select name="game" data-role="game-select" required>
+                            {{range $idx, $game := .GameCatalog}}
+                                <option value="{{$game.Name}}" {{if eq $idx 0}}selected{{end}}>{{$game.DisplayName}}</option>
+                            {{end}}
+                        </select>
+                        <div class="arena-runtime-hint muted" data-role="arena-runtime-hint"></div>
+                        <div class="arena-args" data-role="arena-args"></div>
+                        <input type="hidden" name="game_args" data-role="game-args" />
                         <label>Time Limit (ms, optional)</label>
-                        <input type="number" min="1" name="time_ms" placeholder="default 1000" />
+                        <input type="number" min="1" name="time_ms" data-role="time-ms" placeholder="default 1000" />
                         <label>Allow Handicap (optional)</label>
-                        <select name="allow_handicap">
+                        <select name="allow_handicap" data-role="allow-handicap">
                             <option value="" selected>auto</option>
                             <option value="false">false</option>
                             <option value="true">true</option>
                         </select>
-                        <label>Game Args (comma or space separated)</label>
-                        <input type="text" name="game_args" placeholder="6,7" />
                         <button type="submit">Create Arena</button>
                     </form>
 
@@ -418,21 +423,26 @@ REGISTER &lt;name&gt; "" "" connect4 owner_token={{.OwnerToken}}</pre>
                     <button type="submit">Join Arena</button>
                 </form>
 
-                <form class="admin-action" hx-post="/admin/create-arena" hx-target="#admin-result" hx-swap="innerHTML">
+                <form class="admin-action" data-role="arena-create-form" hx-post="/admin/create-arena" hx-target="#admin-result" hx-swap="innerHTML">
                     <input type="hidden" name="admin_key" value="{{.AdminKey}}" />
                     <h3>Create Arena</h3>
                     <label>Game</label>
-                    <input type="text" name="game" value="connect4" required />
+                    <select name="game" data-role="game-select" required>
+                        {{range $idx, $game := .GameCatalog}}
+                            <option value="{{$game.Name}}" {{if eq $idx 0}}selected{{end}}>{{$game.DisplayName}}</option>
+                        {{end}}
+                    </select>
+                    <div class="arena-runtime-hint muted" data-role="arena-runtime-hint"></div>
+                    <div class="arena-args" data-role="arena-args"></div>
+                    <input type="hidden" name="game_args" data-role="game-args" />
                     <label>Time Limit (ms, optional)</label>
-                    <input type="number" min="1" name="time_ms" placeholder="default 1000" />
+                    <input type="number" min="1" name="time_ms" data-role="time-ms" placeholder="default 1000" />
                     <label>Allow Handicap (optional)</label>
-                    <select name="allow_handicap">
+                    <select name="allow_handicap" data-role="allow-handicap">
                         <option value="" selected>auto</option>
                         <option value="false">false</option>
                         <option value="true">true</option>
                     </select>
-                    <label>Game Args (comma or space separated)</label>
-                    <input type="text" name="game_args" placeholder="6,7" />
                     <button type="submit">Create Arena</button>
                 </form>
             </div>
