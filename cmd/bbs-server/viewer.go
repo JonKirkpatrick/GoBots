@@ -156,11 +156,6 @@ func handleViewerLiveSSE(w http.ResponseWriter, r *http.Request) {
 }
 
 func buildReplayFrames(record stadium.MatchRecord) (games.ViewerSpec, []games.ViewerFrame, error) {
-	adapter, ok := games.GetViewerAdapter(record.Game)
-	if !ok {
-		return games.ViewerSpec{}, nil, fmt.Errorf("viewer not available for game %q", record.Game)
-	}
-
 	args := append([]string(nil), record.GameArgs...)
 	if len(args) == 0 && strings.EqualFold(record.Game, "connect4") {
 		if inferred, err := games.InferConnect4ArgsFromState(record.FinalGameState); err == nil {
@@ -172,6 +167,66 @@ func buildReplayFrames(record stadium.MatchRecord) (games.ViewerSpec, []games.Vi
 	game, err := games.GetGame(gameName, args)
 	if err != nil {
 		return games.ViewerSpec{}, nil, fmt.Errorf("failed to reconstruct game: %w", err)
+	}
+
+	if provider, ok := game.(games.LiveViewerProvider); ok {
+		spec, err := provider.ViewerSpec()
+		if err == nil {
+			frames := make([]games.ViewerFrame, 0, len(record.Moves)+1)
+			initialFrame, frameErr := provider.ViewerFrame(0, record.StartedAt)
+			if frameErr == nil {
+				frames = append(frames, initialFrame)
+
+				if len(record.Moves) > 0 {
+					for i, move := range record.Moves {
+						if err := game.ApplyMove(move.PlayerID, move.Move); err != nil {
+							return games.ViewerSpec{}, nil, fmt.Errorf("failed to apply move %d (%s): %w", i+1, move.Move, err)
+						}
+						frame, err := provider.ViewerFrame(i+1, move.OccurredAt)
+						if err != nil {
+							return games.ViewerSpec{}, nil, err
+						}
+						frames = append(frames, frame)
+					}
+				} else {
+					currentPlayer := 1
+					for i, move := range record.MoveSequence {
+						if err := game.ApplyMove(currentPlayer, move); err != nil {
+							return games.ViewerSpec{}, nil, fmt.Errorf("failed to apply fallback move %d (%s): %w", i+1, move, err)
+						}
+						frame, err := provider.ViewerFrame(i+1, "")
+						if err != nil {
+							return games.ViewerSpec{}, nil, err
+						}
+						frames = append(frames, frame)
+						if currentPlayer == 1 {
+							currentPlayer = 2
+						} else {
+							currentPlayer = 1
+						}
+					}
+				}
+
+				if len(frames) > 0 {
+					last := &frames[len(frames)-1]
+					if record.TerminalStatus == "completed" || record.TerminalStatus == "aborted" {
+						last.IsTerminal = true
+					}
+					if record.IsDraw {
+						last.Winner = "draw"
+					} else if record.WinnerPlayerID == 1 || record.WinnerPlayerID == 2 {
+						last.Winner = fmt.Sprintf("player_%d", record.WinnerPlayerID)
+					}
+				}
+
+				return spec, frames, nil
+			}
+		}
+	}
+
+	adapter, ok := games.GetViewerAdapter(record.Game)
+	if !ok {
+		return games.ViewerSpec{}, nil, fmt.Errorf("viewer not available for game %q", record.Game)
 	}
 
 	initialState := game.GetState()
@@ -237,6 +292,27 @@ func buildLiveViewerEvent(arenaID int) (viewerLiveEvent, bool, error) {
 	arenaState, exists := stadium.DefaultManager.GetArenaViewerState(arenaID)
 	if !exists {
 		return viewerLiveEvent{}, false, nil
+	}
+
+	if arenaState.ViewerSpec != nil && arenaState.ViewerFrame != nil {
+		spec := *arenaState.ViewerSpec
+		frame := *arenaState.ViewerFrame
+		if arenaState.Status == "completed" || arenaState.Status == "aborted" {
+			frame.IsTerminal = true
+			if arenaState.IsDraw {
+				frame.Winner = "draw"
+			} else if arenaState.WinnerPlayerID == 1 || arenaState.WinnerPlayerID == 2 {
+				frame.Winner = fmt.Sprintf("player_%d", arenaState.WinnerPlayerID)
+			}
+		}
+
+		return viewerLiveEvent{
+			ArenaID: arenaState.ArenaID,
+			Status:  arenaState.Status,
+			Spec:    spec,
+			Frame:   frame,
+			Players: buildLiveParticipants(arenaState, spec),
+		}, true, nil
 	}
 
 	adapter, ok := games.GetViewerAdapter(arenaState.Game)

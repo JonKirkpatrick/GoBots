@@ -130,6 +130,7 @@ Optional interfaces:
 - `MoveClockPolicy` to disable move clock enforcement (`EnforceMoveClock() bool`)
 - `HandicapPolicy` to disable handicap controls (`SupportsHandicap() bool`)
 - `EpisodicGame` for episodic continuation (`AdvanceEpisode() ...`)
+- `ViewerProvider` for plugin-defined visuals (`GetViewerSpec()`, `GetViewerFrame(...)`)
 
 Minimal plugin entrypoint pattern:
 
@@ -198,6 +199,8 @@ CREATE mygame board_size=8
 - `protocol_version` must match `games/pluginapi.ProtocolVersion` (currently `1`).
 - Plugin process contract uses JSONL requests/responses over stdin/stdout.
 - Use stderr for plugin logs; stdout is reserved for protocol messages.
+- Viewer methods (`get_viewer_spec` / `get_viewer_frame`) are optional; if absent, BBS uses raw-state fallback rendering.
+- Returning `kind: "plugin-panel"` in `get_viewer_spec` lets plugins drive a richer built-in panel renderer using `raw_state.viewer` fields (title/status/progress/stats).
 
 ### Authoring Best Practices
 

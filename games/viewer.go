@@ -40,6 +40,38 @@ type ViewerAdapter interface {
 	FrameFromState(state string, moveIndex int, timestamp string) (ViewerFrame, error)
 }
 
+// LiveViewerProvider is an optional extension for game instances that can
+// provide render-ready viewer payloads directly from in-memory game state.
+// Process plugins can implement this over RPC to define custom visuals.
+type LiveViewerProvider interface {
+	ViewerSpec() (ViewerSpec, error)
+	ViewerFrame(moveIndex int, timestamp string) (ViewerFrame, error)
+}
+
+// rawStateAdapter is a safe fallback for games without a custom renderer.
+// It preserves access to raw state in the viewer while signaling that no
+// structured board renderer is available yet.
+type rawStateAdapter struct {
+	gameName string
+}
+
+func (a rawStateAdapter) SpecFromState(_ string) (ViewerSpec, error) {
+	return ViewerSpec{
+		Game: a.gameName,
+		Kind: "raw-state",
+		Rows: 1,
+		Cols: 1,
+	}, nil
+}
+
+func (a rawStateAdapter) FrameFromState(state string, moveIndex int, timestamp string) (ViewerFrame, error) {
+	return ViewerFrame{
+		MoveIndex: moveIndex,
+		Timestamp: timestamp,
+		RawState:  state,
+	}, nil
+}
+
 // adapterWrapper wraps game-specific adapters to satisfy ViewerAdapter interface.
 type adapterWrapper struct {
 	rawAdapter interface {
@@ -121,13 +153,17 @@ func mapToViewerFrame(m map[string]interface{}) ViewerFrame {
 
 // GetViewerAdapter resolves a viewer adapter by game name.
 func GetViewerAdapter(gameName string) (ViewerAdapter, bool) {
-	switch strings.ToLower(strings.TrimSpace(gameName)) {
+	normalized := strings.ToLower(strings.TrimSpace(gameName))
+	switch normalized {
 	case "connect4":
 		return adapterWrapper{connect4.GetViewerAdapter()}, true
 	case "gridworld":
 		return adapterWrapper{gridworld.GetViewerAdapter()}, true
 	default:
-		return nil, false
+		if normalized == "" {
+			return nil, false
+		}
+		return rawStateAdapter{gameName: normalized}, true
 	}
 }
 

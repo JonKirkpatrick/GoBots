@@ -515,6 +515,12 @@
             } else if (spec.kind === "gridworld-heatmap") {
                 if (gwSection) gwSection.style.display = "grid";
                 renderGridworld(spec, frame);
+            } else if (spec.kind === "plugin-panel") {
+                if (gwSection) gwSection.style.display = "none";
+                renderPluginPanel(spec, frame);
+            } else if (spec.kind === "raw-state") {
+                if (gwSection) gwSection.style.display = "none";
+                renderRawState(spec, frame);
             } else {
                 if (gwSection) gwSection.style.display = "none";
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -537,6 +543,151 @@
             rawState.textContent = frame.raw_state || "(raw state omitted)";
 
             updateActiveTurn(frame.is_terminal ? 0 : frame.turn_player);
+        }
+
+        function renderRawState(spec, frame) {
+            canvas.width = 760;
+            canvas.height = 180;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = "#1f2937";
+            ctx.font = "15px IBM Plex Mono";
+            ctx.fillText("No custom renderer registered for game '" + spec.game + "'.", 20, 44);
+            ctx.fillText("Displaying raw state below.", 20, 72);
+            if (frame && typeof frame.move_index === "number") {
+                ctx.fillText("Frame: " + frame.move_index, 20, 110);
+            }
+        }
+
+        function parseRawStateObject(rawState) {
+            try {
+                const parsed = JSON.parse(rawState);
+                if (parsed && typeof parsed === "object") {
+                    return parsed;
+                }
+                return null;
+            } catch (_) {
+                return null;
+            }
+        }
+
+        function asNumber(value, fallback) {
+            const num = Number(value);
+            return Number.isFinite(num) ? num : fallback;
+        }
+
+        function drawPanelStatCard(x, y, width, height, label, value) {
+            ctx.fillStyle = "#ffffff";
+            ctx.strokeStyle = "#d8d1bf";
+            ctx.lineWidth = 1;
+            ctx.fillRect(x, y, width, height);
+            ctx.strokeRect(x, y, width, height);
+
+            ctx.fillStyle = "#556";
+            ctx.font = "12px IBM Plex Mono";
+            ctx.fillText(String(label), x + 10, y + 18);
+
+            ctx.fillStyle = "#14213d";
+            ctx.font = "700 26px Space Grotesk";
+            ctx.fillText(String(value), x + 10, y + 52);
+        }
+
+        function renderPluginPanel(spec, frame) {
+            canvas.width = 760;
+            canvas.height = 300;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            const stateObj = parseRawStateObject(frame.raw_state) || {};
+            const view = (stateObj.viewer && typeof stateObj.viewer === "object") ? stateObj.viewer : {};
+
+            const title = String(view.title || (spec.game + " Viewer"));
+            const subtitle = String(view.subtitle || "Plugin-driven panel");
+            const statusText = String(view.status || stateObj.feedback || "Waiting for update...");
+            const hintText = String(view.hint || "");
+            const isDone = !!(stateObj.done || frame.is_terminal);
+
+            let stats = [];
+            if (Array.isArray(view.stats)) {
+                stats = view.stats
+                    .filter(item => item && typeof item === "object")
+                    .map(item => ({
+                        label: String(item.label || "value"),
+                        value: String(item.value ?? "-")
+                    }));
+            }
+            if (stats.length === 0) {
+                stats = [
+                    { label: "Attempts", value: String(stateObj.attempts ?? "-") },
+                    { label: "Range", value: "1 - " + String(stateObj.max_range ?? "?") },
+                    { label: "Finished", value: isDone ? "Yes" : "No" },
+                ];
+            }
+
+            const progress = (view.progress && typeof view.progress === "object") ? view.progress : {};
+            const progressValue = asNumber(progress.value, asNumber(stateObj.attempts, 0));
+            const progressMax = Math.max(1, asNumber(progress.max, Math.max(progressValue, 1)));
+            const progressRatio = Math.max(0, Math.min(1, progressValue / progressMax));
+            const progressLabel = String(progress.label || "Attempts");
+
+            // Background and header band.
+            ctx.fillStyle = "#f7f3e8";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = "#0b7285";
+            ctx.fillRect(0, 0, canvas.width, 62);
+
+            ctx.fillStyle = "#ffffff";
+            ctx.font = "700 28px Space Grotesk";
+            ctx.fillText(title, 20, 40);
+            ctx.font = "13px IBM Plex Mono";
+            ctx.fillText(subtitle, 22, 56);
+
+            // Status callout.
+            ctx.fillStyle = "#fffaf0";
+            ctx.strokeStyle = isDone ? "#1f7a1f" : "#d8d1bf";
+            ctx.lineWidth = isDone ? 2 : 1;
+            ctx.fillRect(20, 82, 720, 58);
+            ctx.strokeRect(20, 82, 720, 58);
+
+            ctx.fillStyle = "#334";
+            ctx.font = "12px IBM Plex Mono";
+            ctx.fillText("Status", 32, 100);
+            ctx.fillStyle = "#14213d";
+            ctx.font = "700 24px Space Grotesk";
+            ctx.fillText(statusText, 32, 128);
+
+            // Progress bar.
+            const barX = 20;
+            const barY = 158;
+            const barW = 720;
+            const barH = 22;
+
+            ctx.fillStyle = "#e9e5d9";
+            ctx.fillRect(barX, barY, barW, barH);
+            ctx.fillStyle = "#1f8ea3";
+            ctx.fillRect(barX, barY, Math.round(barW * progressRatio), barH);
+            ctx.strokeStyle = "#c8c2b0";
+            ctx.lineWidth = 1;
+            ctx.strokeRect(barX, barY, barW, barH);
+
+            ctx.fillStyle = "#314";
+            ctx.font = "12px IBM Plex Mono";
+            ctx.fillText(progressLabel + ": " + progressValue + " / " + progressMax, barX, barY + 38);
+
+            if (hintText) {
+                ctx.fillStyle = "#445";
+                ctx.font = "12px IBM Plex Mono";
+                ctx.fillText(hintText, 420, barY + 38);
+            }
+
+            // Stats row.
+            const cardY = 206;
+            const gap = 10;
+            const cardCount = Math.min(4, Math.max(1, stats.length));
+            const cardW = Math.floor((720 - gap * (cardCount - 1)) / cardCount);
+            for (let i = 0; i < cardCount; i++) {
+                const stat = stats[i];
+                const x = 20 + i * (cardW + gap);
+                drawPanelStatCard(x, cardY, cardW, 78, stat.label, stat.value);
+            }
         }
 
         function renderConnect4(spec, frame) {

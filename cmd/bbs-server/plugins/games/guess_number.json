@@ -1,0 +1,17 @@
+{
+  "protocol_version": 1,
+  "name": "guess_number",
+  "display_name": "Guess The Number",
+  "executable": "guess_number_plugin.py",
+  "supports_move_clock": false,
+  "supports_handicap": false,
+  "args": [
+    {
+      "key": "max_range",
+      "label": "Max Number",
+      "input_type": "number",
+      "default_value": "100",
+      "help": "The hidden number will be between 1 and this value."
+    }
+  ]
+}

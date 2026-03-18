@@ -111,6 +111,60 @@ The linter validates:
 - allowed `input_type` values
 - `protocol_version` compatibility
 
+## Viewer Integration
+
+Plugin games now support plugin-defined visuals over RPC.
+
+Optional methods:
+
+- `get_viewer_spec`
+- `get_viewer_frame`
+
+When implemented, `init` should return:
+
+- `supports_viewer: true`
+
+Expected result payloads:
+
+- `get_viewer_spec` result fields:
+  - `game`
+  - `kind`
+  - `rows`
+  - `cols`
+  - `player_colors`
+- `get_viewer_frame` result fields:
+  - `move_index`
+  - `turn_player`
+  - `tokens` (`[{player,row,col}, ...]`)
+  - `timestamp`
+  - `is_terminal`
+  - `winner`
+  - `raw_state`
+
+If viewer methods are not implemented, BBS falls back to `raw-state` mode, which still provides useful observability in the viewer.
+
+Built-in frontend renderer options:
+
+- `raw-state`: always available fallback, shows protocol metadata and raw JSON.
+- `plugin-panel`: generic plugin-driven panel renderer. Populate `raw_state` JSON with a `viewer` object to control:
+  - `title`, `subtitle`, `status`, `hint`
+  - `progress`: `{label, value, max}`
+  - `stats`: `[{label, value}, ...]`
+
+With `plugin-panel`, game authors can customize the viewer presentation without changing server-side Go code or frontend template logic.
+If you choose a brand-new `spec.kind`, add a matching renderer branch in `cmd/bbs-server/templates/viewer.html`.
+
+For Go-based plugins using `pluginapi.Serve`, implement the optional `ViewerProvider` interface:
+
+- `GetViewerSpec() (ViewerSpecResult, error)`
+- `GetViewerFrame(moveIndex int, timestamp string) (ViewerFrameResult, error)`
+
+Practical guidance:
+
+- Keep `GetState()` and viewer payloads stable and forward-compatible.
+- Choose a unique `spec.kind` string if you plan to add a dedicated frontend renderer branch later.
+- Include all visual primitives needed by the frontend in frame data.
+
 ## Release Checklist
 
 1. Build binary for target platform(s).
