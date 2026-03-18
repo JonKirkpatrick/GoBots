@@ -39,6 +39,7 @@ fi
 (
   cd "$REPO_ROOT/cmd/bbs-server"
   export BBS_DASHBOARD_ADMIN_KEY
+  export BBS_ENABLE_GAME_PLUGINS="${BBS_ENABLE_GAME_PLUGINS:-false}"
   export TZ="${TZ:-UTC}"
   nohup "$BIN_PATH" >>"$LOG_FILE" 2>&1 &
   echo $! >"$PID_FILE"
