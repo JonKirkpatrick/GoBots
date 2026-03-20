@@ -383,6 +383,24 @@ All runtime state is currently in memory. Process restart clears sessions, arena
 Current transport is plain TCP and current secrets/token handling is bearer-style.
 Treat these as local/home-lab friendly defaults, not internet-hardened production controls.
 
+## Contributing
+
+Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for:
+
+- Getting started with local development (`make build`, `make test`)
+- Code style and how to submit changes
+- Plugin authoring guidelines and examples
+- Testing procedures
+
+Key development commands:
+
+```bash
+make build           # Build all binaries
+make lint            # Validate plugins and run go vet
+make test            # Run tests
+make run-server      # Start with plugins enabled
+```
+
 ## Deployment Guides
 
 - Docker on TrueNAS SCALE: `deploy/truenas/README.md`
