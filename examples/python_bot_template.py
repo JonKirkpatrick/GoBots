@@ -114,7 +114,22 @@ class BotTemplateClient:
         except Exception:
             pass
 
+    def send_json_command(self, msg_type: str, payload: dict) -> None:
+        """Send a JSON-envelope formatted command to the server."""
+        if self.sock is None:
+            raise RuntimeError("socket is not connected")
+
+        envelope = {
+            "v": "1",
+            "type": msg_type,
+            "payload": payload,
+        }
+        line = json.dumps(envelope, ensure_ascii=True) + "\n"
+        with self.write_lock:
+            self.sock.sendall(line.encode("utf-8"))
+
     def send_command(self, command: str) -> None:
+        """Send a raw text command to the server (plain text protocol)."""
         if self.sock is None:
             raise RuntimeError("socket is not connected")
 
@@ -231,6 +246,7 @@ def build_register_command(
     capabilities_csv: str,
     owner_token: Optional[str],
 ) -> str:
+    """Build the text command for REGISTER (plain text protocol)."""
     if any(ch.isspace() for ch in name):
         raise ValueError("bot name cannot contain whitespace for this template")
 
@@ -269,7 +285,7 @@ def run() -> int:
     parser.add_argument("--owner-token", default="", help="Optional owner_token from dashboard")
     parser.add_argument(
         "--capabilities",
-        default="connect4",
+        default="any",
         help="Comma-separated capability tags to advertise during REGISTER",
     )
     args = parser.parse_args()

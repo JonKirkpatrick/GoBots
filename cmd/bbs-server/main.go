@@ -121,19 +121,19 @@ func handleBot(conn net.Conn) {
 		}
 	}()
 
-	// Display the banner
-	conn.Write([]byte(WelcomeBanner))
-	conn.Write([]byte("\nWelcome to the Build-a-Bot Stadium!"))
-	conn.Write([]byte("\nType HELP at any time for a command list.\n\n"))
+	// Send a JSON welcome envelope so clients can stay in JSONL mode from first byte.
+	sess.SendJSON(stadium.Response{Status: "ok", Type: "welcome", Payload: map[string]string{
+		"message": "Welcome to the Build-a-Bot Stadium! Type HELP at any time for a command list.",
+	}})
 	scanner := bufio.NewScanner(conn)
 
 	for scanner.Scan() {
 		input := strings.TrimSpace(scanner.Text())
-		parts := strings.Split(input, " ")
+		parts := strings.Fields(input)
 		if len(parts) == 0 {
 			continue
 		}
-		command := parts[0]
+		command := strings.ToUpper(parts[0])
 
 		// Enforce State Machine
 		if !sess.IsRegistered && command != "REGISTER" && command != "QUIT" && command != "HELP" {
@@ -144,7 +144,7 @@ func handleBot(conn net.Conn) {
 		switch command {
 
 		case "HELP":
-			sess.Conn.Write([]byte(stadium.GetHelpText(sess.IsRegistered) + "\n"))
+			sess.SendJSON(stadium.Response{Status: "ok", Type: "help", Payload: map[string]string{"text": stadium.GetHelpText(sess.IsRegistered)}})
 
 		case "REGISTER":
 			if len(parts) < 4 {
@@ -161,6 +161,7 @@ func handleBot(conn net.Conn) {
 			}
 
 			sess.SendJSON(stadium.Response{Status: "ok", Type: "register", Payload: result})
+			stadium.DefaultManager.PublishArenaList()
 
 		case "WHOAMI":
 			payload := map[string]interface{}{
@@ -178,6 +179,10 @@ func handleBot(conn net.Conn) {
 
 		case "UPDATE":
 			// Usage: UPDATE <field> <value>
+			if len(parts) < 3 {
+				sess.SendJSON(stadium.Response{Status: "err", Type: "error", Payload: "Usage: UPDATE <field> <value>"})
+				continue
+			}
 			err := stadium.DefaultManager.UpdateSessionProfile(sess, parts[1], parts[2])
 			if err != nil {
 				sess.SendJSON(stadium.Response{Status: "err", Type: "error", Payload: err.Error()})
@@ -225,7 +230,7 @@ func handleBot(conn net.Conn) {
 			}
 
 			if sess.CurrentArena == nil {
-				conn.Write([]byte("ERR: No active match\n"))
+				sess.SendJSON(stadium.Response{Status: "err", Type: "error", Payload: "No active match"})
 				continue
 			}
 
@@ -273,13 +278,13 @@ func handleBot(conn net.Conn) {
 				_ = stadium.DefaultManager.RecordMove(sess.CurrentArena.ID, sess, parts[1], elapsed)
 
 				sess.SendJSON(stadium.Response{Status: "ok", Type: "move", Payload: "accepted"})
-				sess.CurrentArena.NotifyAll("update", "Player "+strconv.Itoa(sess.PlayerID)+" moved to "+parts[1])
+				arenaRef.NotifyAll("update", "Player "+strconv.Itoa(sess.PlayerID)+" moved to "+parts[1])
 
 				// Pro-tip: Send the updated game state to everyone immediately
 				// This was added because of earlier problems where bots would effectively
 				// get stuck thinking they were in an arena after a game was already over.
-				state := sess.CurrentArena.Game.GetState()
-				sess.CurrentArena.NotifyAll("data", state)
+				state := arenaRef.Game.GetState()
+				arenaRef.NotifyAll("data", state)
 
 				if over, winner := arenaRef.Game.IsGameOver(); over {
 					winnerPlayerID, isDraw := parseWinnerResult(winner)
@@ -313,35 +318,29 @@ func handleBot(conn net.Conn) {
 
 		case "LIST":
 			matches := stadium.DefaultManager.ListMatches()
-
-			var sb strings.Builder
-			sb.WriteString("CURRENT_ARENAS:\n")
-			for _, m := range matches {
-				fmt.Fprintf(&sb, "%d: [%s] %s vs %s\n", m.ID, m.Game, m.P1Name, m.P2Name)
-			}
 			sess.SendJSON(stadium.Response{
 				Status:  "ok",
 				Type:    "list",
-				Payload: sb.String(),
+				Payload: matches,
 			})
 
 		case "WATCH":
 			if len(parts) < 2 {
-				conn.Write([]byte("ERR: Usage: WATCH <match_id>\n"))
+				sess.SendJSON(stadium.Response{Status: "err", Type: "error", Payload: "Usage: WATCH <arena_id>"})
 				continue
 			}
 			id, err := strconv.Atoi(parts[1])
 			if err != nil {
-				conn.Write([]byte("ERR: Invalid Match ID\n"))
+				sess.SendJSON(stadium.Response{Status: "err", Type: "error", Payload: "arena_id must be a positive integer"})
 				continue
 			}
 			err = stadium.DefaultManager.AddObserver(id, sess)
 			if err != nil {
-				conn.Write([]byte("ERR: " + err.Error() + "\n"))
+				sess.SendJSON(stadium.Response{Status: "err", Type: "error", Payload: err.Error()})
 			} else {
-				conn.Write([]byte("OK: Watching match " + parts[1] + "\n"))
+				sess.SendJSON(stadium.Response{Status: "ok", Type: "watch", Payload: map[string]interface{}{"arena_id": id}})
 				state := sess.CurrentArena.Game.GetState()
-				conn.Write([]byte("DATA: \n" + state + "\n"))
+				sess.SendJSON(stadium.Response{Status: "ok", Type: "data", Payload: state})
 			}
 
 		case "LEAVE":
@@ -355,11 +354,11 @@ func handleBot(conn net.Conn) {
 			sess.SendJSON(stadium.Response{Status: "ok", Type: "leave", Payload: "Left arena successfully"})
 
 		case "QUIT":
-			conn.Write([]byte("BBS_STADIUM: Connection closed. Press ENTER to return to your prompt.\n"))
+			sess.SendJSON(stadium.Response{Status: "ok", Type: "quit", Payload: "Connection closing"})
 			return // This triggers the defer conn.Close()
 
 		default:
-			conn.Write([]byte("ERR: Unknown command\n"))
+			sess.SendJSON(stadium.Response{Status: "err", Type: "error", Payload: "Unknown command"})
 		}
 	}
 }

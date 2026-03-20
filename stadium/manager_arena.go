@@ -13,9 +13,11 @@ func (m *Manager) StartWatchdog() {
 	ticker := time.NewTicker(10 * time.Second)
 	go func() {
 		for range ticker.C {
+			changed := false
 			m.mu.Lock()
 			for id, arena := range m.Arenas {
 
+				arena.mu.Lock()
 				switch arena.Status {
 				case "active":
 					if games.EnforceMoveClock(arena.Game) {
@@ -25,55 +27,71 @@ func (m *Manager) StartWatchdog() {
 						}
 						// Timed games are strictly monitored for stale active arenas.
 						if time.Since(arena.LastMove) > (maxMoveLimit * 3) {
-							m.terminateArena(id, "Arena closed: Active game timed out.")
+							arena.mu.Unlock()
+							changed = m.terminateArena(id, "Arena closed: Active game timed out.") || changed
+							continue
 						}
 					} else {
 						// Untimed environments can run episodic loops; only clean up if idle for a long period.
 						if time.Since(arena.LastMove) > (24 * time.Hour) {
-							m.terminateArena(id, "Arena closed: Active arena idle too long.")
+							arena.mu.Unlock()
+							changed = m.terminateArena(id, "Arena closed: Active arena idle too long.") || changed
+							continue
 						}
 					}
 				case "completed":
 					// Completed games can linger briefly for stats/spectators
 					if time.Since(arena.LastMove) > (1 * time.Minute) {
-						m.terminateArena(id, "Arena closed: Match concluded.")
+						arena.mu.Unlock()
+						changed = m.terminateArena(id, "Arena closed: Match concluded.") || changed
+						continue
 					}
 				case "waiting":
 					// Waiting arenas can live for an hour
 					if time.Since(arena.LastMove) > (1 * time.Hour) {
-						m.terminateArena(id, "Arena closed: Lobby timed out.")
+						arena.mu.Unlock()
+						changed = m.terminateArena(id, "Arena closed: Lobby timed out.") || changed
+						continue
 					}
 				case "aborted":
 					// Aborted arenas can live for a short time for debugging
 					if time.Since(arena.LastMove) > (5 * time.Minute) {
-						m.terminateArena(id, "Arena closed: Match aborted.")
+						arena.mu.Unlock()
+						changed = m.terminateArena(id, "Arena closed: Match aborted.") || changed
+						continue
 					}
 				}
+				arena.mu.Unlock()
 			}
 			m.mu.Unlock()
+			if changed {
+				m.PublishArenaList()
+			}
 		}
 	}()
 }
 
 // terminateArena is a helper method to cleanly close an arena and notify participants of the reason.
-func (m *Manager) terminateArena(id int, reason string) {
+func (m *Manager) terminateArena(id int, reason string) bool {
 	if arena, ok := m.Arenas[id]; ok {
 		arena.NotifyAll("error", reason)
 		_ = games.CloseGame(arena.Game)
 		delete(m.Arenas, id)
-		m.broadcastArenaListLocked()
+		return true
 	}
+	return false
 }
 
 // DestroyArena is a public method to forcefully remove an arena, typically called when a player leaves or a match ends.
 func (m *Manager) DestroyArena(id int) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if arena, ok := m.Arenas[id]; ok {
 		_ = games.CloseGame(arena.Game)
 	}
 	delete(m.Arenas, id)
-	m.broadcastArenaListLocked()
+	subscribers, events := m.prepareArenaListBroadcastLocked()
+	m.mu.Unlock()
+	m.publishEvents(subscribers, events)
 }
 
 // NotifyOpponent sends a message to the opponent of the given actorID (1 or 2) in the arena.
@@ -86,7 +104,7 @@ func (a *Arena) NotifyOpponent(actorID int, message string) {
 	}
 
 	if opponent != nil && opponent.Conn != nil {
-		fmt.Fprintf(opponent.Conn, "UPDATE: %s\n", message)
+		opponent.SendJSON(Response{Status: "ok", Type: "update", Payload: message})
 	}
 }
 
@@ -125,6 +143,7 @@ func (m *Manager) ListMatches() []ArenaSummary {
 func (m *Manager) listMatches() []ArenaSummary {
 	var list []ArenaSummary
 	for id, arena := range m.Arenas {
+		arena.mu.Lock()
 		summary := ArenaSummary{
 			ID:     id,
 			Game:   arena.Game.GetName(),
@@ -136,6 +155,7 @@ func (m *Manager) listMatches() []ArenaSummary {
 		if arena.Player2 != nil {
 			summary.P2Name = arena.Player2.BotName
 		}
+		arena.mu.Unlock()
 		list = append(list, summary)
 	}
 	return list
@@ -144,24 +164,28 @@ func (m *Manager) listMatches() []ArenaSummary {
 // AddObserver allows a session to start observing an arena, receiving updates without participating as a player.
 func (m *Manager) AddObserver(arenaID int, observer *Session) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	arena, exists := m.Arenas[arenaID]
+	m.mu.Unlock()
 	if !exists {
 		return errors.New("arena not found")
 	}
 
+	arena.mu.Lock()
 	arena.Observers = append(arena.Observers, observer)
 	observer.CurrentArena = arena
-	m.broadcastArenaListLocked()
+	arena.mu.Unlock()
+	m.PublishArenaList()
 	return nil
 }
 
 // CreateArena now accepts the fully-initialized GameInstance.
 func (m *Manager) CreateArena(game games.GameInstance, gameArgs []string, timeLimit time.Duration, allowHandicap bool) int {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.createArenaLocked(game, gameArgs, timeLimit, allowHandicap)
+	id := m.createArenaLocked(game, gameArgs, timeLimit, allowHandicap)
+	subscribers, events := m.prepareArenaListBroadcastLocked()
+	m.mu.Unlock()
+	m.publishEvents(subscribers, events)
+	return id
 }
 
 func (m *Manager) createArenaLocked(game games.GameInstance, gameArgs []string, timeLimit time.Duration, allowHandicap bool) int {
@@ -195,19 +219,28 @@ func (m *Manager) createArenaLocked(game games.GameInstance, gameArgs []string, 
 	if requiredPlayers == 0 {
 		m.activateArena(m.Arenas[id])
 	}
-
-	m.broadcastArenaListLocked()
 	return id
 }
 
 // JoinArena allows a session to join an existing arena as a player, assigning them to Player 1 or Player 2 as appropriate, and starts the game if both players are present.
 func (m *Manager) JoinArena(arenaID int, s *Session, handicap int) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.joinArenaLocked(arenaID, s, handicap)
+	arena, exists := m.Arenas[arenaID]
+	m.mu.Unlock()
+	if !exists {
+		return errors.New("arena not found")
+	}
+
+	err := m.joinArena(arena, s, handicap)
+	if err != nil {
+		return err
+	}
+
+	m.PublishArenaList()
+	return nil
 }
 
-func (m *Manager) joinArenaLocked(arenaID int, s *Session, handicap int) error {
+func (m *Manager) joinArena(arena *Arena, s *Session, handicap int) error {
 	if s == nil || !s.IsRegistered {
 		return errors.New("session must be registered before joining an arena")
 	}
@@ -215,13 +248,10 @@ func (m *Manager) joinArenaLocked(arenaID int, s *Session, handicap int) error {
 		return fmt.Errorf("session is already attached to arena %d", s.CurrentArena.ID)
 	}
 
-	arena, exists := m.Arenas[arenaID]
-	if !exists {
-		return errors.New("arena not found")
-	}
-
+	arena.mu.Lock()
 	appliedHandicap, err := normalizeArenaHandicap(handicap, arena.AllowHandicap)
 	if err != nil {
+		arena.mu.Unlock()
 		return err
 	}
 
@@ -230,6 +260,7 @@ func (m *Manager) joinArenaLocked(arenaID int, s *Session, handicap int) error {
 		requiredPlayers = 2
 	}
 	if requiredPlayers == 0 {
+		arena.mu.Unlock()
 		return errors.New("arena does not accept player joins")
 	}
 
@@ -243,13 +274,11 @@ func (m *Manager) joinArenaLocked(arenaID int, s *Session, handicap int) error {
 		arena.Player2Handicap = appliedHandicap
 		// Status update happens inside activateArena now
 	} else {
+		arena.mu.Unlock()
 		return errors.New("arena full")
 	}
 
 	s.CurrentArena = arena
-
-	// 1. Prepare the Payload for the Bot
-	// This gives the bot its constraints immediately upon joining.
 	manifest := map[string]interface{}{
 		"arena_id":                arena.ID,
 		"player_id":               s.PlayerID,
@@ -262,71 +291,68 @@ func (m *Manager) joinArenaLocked(arenaID int, s *Session, handicap int) error {
 		"handicap_percent":        appliedHandicap,
 		"effective_time_limit_ms": arena.MoveLimitForPlayer(s.PlayerID).Milliseconds(),
 	}
+	shouldActivate := (requiredPlayers == 1 && arena.Player1 != nil) || (requiredPlayers >= 2 && arena.Player1 != nil && arena.Player2 != nil)
+	arena.mu.Unlock()
 
-	// 2. Send the confirmation to the bot
+	// Send join confirmation to the bot.
 	s.SendJSON(Response{Status: "ok", Type: "join", Payload: manifest})
 
-	// 3. If the arena is now ready, kick off the game
-	if requiredPlayers == 1 && arena.Player1 != nil {
-		m.activateArena(arena)
-	} else if requiredPlayers >= 2 && arena.Player1 != nil && arena.Player2 != nil {
+	if shouldActivate {
 		m.activateArena(arena)
 	}
 
-	m.broadcastArenaListLocked()
 	return nil
 }
 
 // HandlePlayerLeave is called when a session disconnects or quits, ensuring that the arena is properly cleaned up and the opponent is notified.
 func (m *Manager) HandlePlayerLeave(s *Session) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if s.CurrentArena != nil {
-		arena := s.CurrentArena
-
-		// If the leaving session is an observer, remove them from the slice and
-		// return early — the match itself is unaffected.
-		if arena.Player1 != s && arena.Player2 != s {
-			for i, obs := range arena.Observers {
-				if obs == s {
-					arena.Observers = append(arena.Observers[:i], arena.Observers[i+1:]...)
-					break
-				}
-			}
-			s.CurrentArena = nil
-			m.broadcastArenaListLocked()
-			return
-		}
-
-		winnerPlayerID := 0
-
-		if arena.Player1 == s && arena.Player2 != nil {
-			winnerPlayerID = 2
-		}
-		if arena.Player2 == s && arena.Player1 != nil {
-			winnerPlayerID = 1
-		}
-
-		status := "aborted"
-		if winnerPlayerID != 0 {
-			status = "completed"
-		}
-
-		arena.NotifyAll("error", "Player "+s.BotName+" left.")
-		_, _ = m.finalizeArenaLocked(arena, "player_left", status, winnerPlayerID, false)
-		m.broadcastArenaListLocked()
-	}
-}
-
-// leaveArenaLocked removes a session from its current arena without closing the
-// TCP connection. The session remains registered and eligible to join another arena.
-// Called with m.mu held.
-func (m *Manager) leaveArenaLocked(s *Session) {
-	if s.CurrentArena == nil {
+	if s == nil || s.CurrentArena == nil {
 		return
 	}
 	arena := s.CurrentArena
+
+	winnerPlayerID := 0
+	status := "aborted"
+
+	arena.mu.Lock()
+	isObserver := arena.Player1 != s && arena.Player2 != s
+	if isObserver {
+		for i, obs := range arena.Observers {
+			if obs == s {
+				arena.Observers = append(arena.Observers[:i], arena.Observers[i+1:]...)
+				break
+			}
+		}
+		s.CurrentArena = nil
+		arena.mu.Unlock()
+		m.PublishArenaList()
+		return
+	}
+
+	if arena.Player1 == s && arena.Player2 != nil {
+		winnerPlayerID = 2
+	}
+	if arena.Player2 == s && arena.Player1 != nil {
+		winnerPlayerID = 1
+	}
+	if winnerPlayerID != 0 {
+		status = "completed"
+	}
+	arena.mu.Unlock()
+
+	arena.NotifyAll("error", "Player "+s.BotName+" left.")
+	_, _ = m.finalizeArenaLocked(arena, "player_left", status, winnerPlayerID, false)
+	m.PublishArenaList()
+}
+
+// leaveArena removes a session from its current arena without closing the
+// TCP connection. The session remains registered and eligible to join another arena.
+func (m *Manager) leaveArena(s *Session) bool {
+	if s.CurrentArena == nil {
+		return false
+	}
+	arena := s.CurrentArena
+	arena.mu.Lock()
 
 	// Observer path — detach without affecting the match itself.
 	if arena.Player1 != s && arena.Player2 != s {
@@ -337,8 +363,8 @@ func (m *Manager) leaveArenaLocked(s *Session) {
 			}
 		}
 		s.CurrentArena = nil
-		m.broadcastArenaListLocked()
-		return
+		arena.mu.Unlock()
+		return true
 	}
 
 	// Waiting arena (at most one player occupying a slot) — detach cleanly so
@@ -351,9 +377,9 @@ func (m *Manager) leaveArenaLocked(s *Session) {
 		}
 		s.CurrentArena = nil
 		s.PlayerID = 0
+		arena.mu.Unlock()
 		s.SendJSON(Response{Status: "ok", Type: "leave", Payload: "Left arena successfully"})
-		m.broadcastArenaListLocked()
-		return
+		return true
 	}
 
 	// Active arena — the leaving player forfeits; finalize and notify.
@@ -368,34 +394,38 @@ func (m *Manager) leaveArenaLocked(s *Session) {
 	if winnerPlayerID != 0 {
 		status = "completed"
 	}
+	arena.mu.Unlock()
 	arena.NotifyAll("info", "Player "+s.BotName+" left the arena.")
 	_, _ = m.finalizeArenaLocked(arena, "player_left", status, winnerPlayerID, false)
 	// finalizeArenaLocked clears CurrentArena and PlayerID for both players.
-	m.broadcastArenaListLocked()
+	return true
 }
 
 // LeaveArena removes a session from its current arena without ejecting it from
 // the stadium. The session stays registered and can join another arena.
 func (m *Manager) LeaveArena(s *Session) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.leaveArenaLocked(s)
+	if !m.leaveArena(s) {
+		return
+	}
+	m.PublishArenaList()
 }
 
 // LeaveArenaForSession removes the session with the given ID from its current
 // arena without closing its TCP connection. Used by the admin dashboard.
 func (m *Manager) LeaveArenaForSession(sessionID int) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	sess, exists := m.ActiveSessions[sessionID]
+	m.mu.Unlock()
+
 	if !exists {
 		return errors.New("session not found")
 	}
 	if sess.CurrentArena == nil {
 		return errors.New("session is not currently in an arena")
 	}
-	m.leaveArenaLocked(sess)
+	if m.leaveArena(sess) {
+		m.PublishArenaList()
+	}
 	return nil
 }
 
@@ -403,19 +433,29 @@ func (m *Manager) LeaveArenaForSession(sessionID int) error {
 // of the admin — the internal equivalent of the JOIN TCP command.
 func (m *Manager) JoinArenaForSession(sessionID int, arenaID int, handicap int) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	sess, exists := m.ActiveSessions[sessionID]
+	arena, arenaExists := m.Arenas[arenaID]
+	m.mu.Unlock()
+
 	if !exists {
 		return errors.New("session not found")
 	}
-	return m.joinArenaLocked(arenaID, sess, handicap)
+	if !arenaExists {
+		return errors.New("arena not found")
+	}
+	err := m.joinArena(arena, sess, handicap)
+	if err != nil {
+		return err
+	}
+	m.PublishArenaList()
+	return nil
 }
 
 // activateArena sets the arena status to active,
 // initializes player time based on handicap settings,
 // and notifies both players that the game has started.
 func (m *Manager) activateArena(a *Arena) {
+	a.mu.Lock()
 	a.Status = "active"
 	a.LastMove = time.Now()
 	a.ActivatedAt = time.Now()
@@ -423,6 +463,7 @@ func (m *Manager) activateArena(a *Arena) {
 	// Initialize per-player move clocks from the arena base time and handicap percentages.
 	a.Bot1Time = a.MoveLimitForPlayer(1)
 	a.Bot2Time = a.MoveLimitForPlayer(2)
+	a.mu.Unlock()
 
 	if a.Player2 != nil {
 		msg := "Game Start! Opponent: " + a.Player1.BotName + " vs " + a.Player2.BotName

@@ -37,6 +37,7 @@ func (m *Manager) GetArenaViewerState(arenaID int) (ArenaViewerState, bool) {
 		return ArenaViewerState{}, false
 	}
 
+	arena.mu.Lock()
 	state := ArenaViewerState{
 		ArenaID:        arena.ID,
 		Game:           arena.Game.GetName(),
@@ -66,6 +67,7 @@ func (m *Manager) GetArenaViewerState(arenaID int) (ArenaViewerState, bool) {
 			Draws:  arena.Player2.Draws,
 		}
 	}
+	arena.mu.Unlock()
 
 	return state, true
 }

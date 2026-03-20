@@ -12,27 +12,37 @@ func (m *Manager) Unsubscribe(ch chan StadiumEvent) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.subscribers, ch)
-	close(ch)
 }
 
 func (m *Manager) PublishArenaList() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.broadcastArenaListLocked()
+	subscribers, events := m.prepareArenaListBroadcastLocked()
+	m.mu.Unlock()
+	m.publishEvents(subscribers, events)
 }
 
-func (m *Manager) broadcastArenaListLocked() {
-	m.broadcastLocked("arena_list", m.listMatches())
-	m.broadcastLocked("manager_state", m.snapshotLocked())
-}
-
-func (m *Manager) broadcastLocked(eventType string, payload interface{}) {
-	event := StadiumEvent{Type: eventType, Payload: payload}
+func (m *Manager) prepareArenaListBroadcastLocked() ([]chan StadiumEvent, []StadiumEvent) {
+	subscribers := make([]chan StadiumEvent, 0, len(m.subscribers))
 	for ch := range m.subscribers {
-		select {
-		case ch <- event:
-		default:
-			// Client is too slow; avoid blocking the whole server
+		subscribers = append(subscribers, ch)
+	}
+
+	events := []StadiumEvent{
+		{Type: "arena_list", Payload: m.listMatches()},
+		{Type: "manager_state", Payload: m.snapshotLocked()},
+	}
+
+	return subscribers, events
+}
+
+func (m *Manager) publishEvents(subscribers []chan StadiumEvent, events []StadiumEvent) {
+	for _, event := range events {
+		for _, ch := range subscribers {
+			select {
+			case ch <- event:
+			default:
+				// Client is too slow; avoid blocking the whole server
+			}
 		}
 	}
 }

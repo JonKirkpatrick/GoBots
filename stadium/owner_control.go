@@ -49,41 +49,53 @@ func (m *Manager) OwnerSessionSnapshot(ownerToken string) (SessionSnapshot, bool
 
 func (m *Manager) CreateArenaForOwner(ownerToken string, game games.GameInstance, gameArgs []string, timeLimit time.Duration, allowHandicap bool) (int, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	if _, ok := m.sessionByOwnerTokenLocked(ownerToken); !ok {
+		m.mu.Unlock()
 		return 0, errors.New("no active session is linked to this dashboard token")
 	}
 
-	return m.createArenaLocked(game, gameArgs, timeLimit, allowHandicap), nil
+	id := m.createArenaLocked(game, gameArgs, timeLimit, allowHandicap)
+	m.mu.Unlock()
+	m.PublishArenaList()
+	return id, nil
 }
 
 func (m *Manager) JoinArenaForOwner(ownerToken string, arenaID int, handicap int) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	sess, ok := m.sessionByOwnerTokenLocked(ownerToken)
 	if !ok {
+		m.mu.Unlock()
 		return errors.New("no active session is linked to this dashboard token")
 	}
+	arena, exists := m.Arenas[arenaID]
+	m.mu.Unlock()
+	if !exists {
+		return errors.New("arena not found")
+	}
 
-	return m.joinArenaLocked(arenaID, sess, handicap)
+	if err := m.joinArena(arena, sess, handicap); err != nil {
+		return err
+	}
+	m.PublishArenaList()
+	return nil
 }
 
 // LeaveArenaForOwner removes the owner's bot from its current arena without
 // closing the TCP connection — the bot stays registered and can rejoin.
 func (m *Manager) LeaveArenaForOwner(ownerToken string) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	sess, ok := m.sessionByOwnerTokenLocked(ownerToken)
 	if !ok {
+		m.mu.Unlock()
 		return errors.New("no active session is linked to this dashboard token")
 	}
+	m.mu.Unlock()
+
 	if sess.CurrentArena == nil {
 		return errors.New("bot is not currently in an arena")
 	}
-	m.leaveArenaLocked(sess)
+	m.leaveArena(sess)
+	m.PublishArenaList()
 	return nil
 }
 

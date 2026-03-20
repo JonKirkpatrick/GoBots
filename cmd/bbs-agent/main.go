@@ -518,7 +518,7 @@ func (a *agent) handleServerLine(line string) {
 	msgType := strings.ToLower(strings.TrimSpace(msg.Type))
 	status := strings.ToLower(strings.TrimSpace(msg.Status))
 
-	if msgType == "register" {
+	if msgType == "register" || (msgType == "auth" && status == "err") {
 		select {
 		case a.registerCh <- msg:
 		default:

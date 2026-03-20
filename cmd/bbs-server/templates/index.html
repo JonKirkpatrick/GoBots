@@ -846,11 +846,228 @@
             });
         }
 
-        function renderDashboardStateHTML(html) {
-            const target = document.getElementById("dashboard-state-target");
+        function formSignature(form, root) {
+            if (!form || !root) {
+                return "";
+            }
+
+            const forms = Array.from(root.querySelectorAll("form"));
+            const formIndex = forms.indexOf(form);
+            if (formIndex < 0) {
+                return "";
+            }
+
+            const role = (form.getAttribute("data-role") || "").trim();
+            const action = (form.getAttribute("action") || form.getAttribute("hx-post") || "").trim();
+            const className = (form.getAttribute("class") || "").trim();
+
+            return [String(formIndex), role, action, className].join("::");
+        }
+
+        function controlSignature(control, root) {
+            if (!control || !control.form) {
+                return "";
+            }
+
+            const name = (control.getAttribute("name") || "").trim();
+            if (!name) {
+                return "";
+            }
+
+            const formSig = formSignature(control.form, root);
+            if (!formSig) {
+                return "";
+            }
+
+            const tag = (control.tagName || "").toLowerCase();
+            const type = (control.getAttribute("type") || "").toLowerCase();
+
+            const formControls = Array.from(control.form.querySelectorAll("input[name], select[name], textarea[name]"));
+            const index = formControls.indexOf(control);
+            if (index < 0) {
+                return "";
+            }
+
+            return [formSig, tag, type, name, String(index)].join("::");
+        }
+
+        function captureDashboardUIState(target) {
+            const state = {
+                controls: {},
+                focused: null,
+                details: {},
+            };
             if (!target) {
+                return state;
+            }
+
+            const activeElement = document.activeElement;
+            const controls = target.querySelectorAll("input[name], select[name], textarea[name]");
+            controls.forEach(function (control) {
+                const signature = controlSignature(control, target);
+                if (!signature) {
+                    return;
+                }
+
+                const snapshot = {
+                    value: control.value,
+                    checked: !!control.checked,
+                };
+
+                if (activeElement === control) {
+                    snapshot.focused = true;
+                    if (typeof control.selectionStart === "number" && typeof control.selectionEnd === "number") {
+                        snapshot.selectionStart = control.selectionStart;
+                        snapshot.selectionEnd = control.selectionEnd;
+                    }
+                    state.focused = signature;
+                }
+
+                state.controls[signature] = snapshot;
+            });
+
+            const detailNodes = target.querySelectorAll("details");
+            detailNodes.forEach(function (node, index) {
+                const key = "details::" + index;
+                state.details[key] = !!node.open;
+            });
+
+            return state;
+        }
+
+        function restoreDashboardUIState(target, state) {
+            if (!target || !state) {
                 return;
             }
+
+            const controls = target.querySelectorAll("input[name], select[name], textarea[name]");
+            controls.forEach(function (control) {
+                const signature = controlSignature(control, target);
+                if (!signature) {
+                    return;
+                }
+
+                const snapshot = state.controls[signature];
+                if (!snapshot) {
+                    return;
+                }
+
+                const tag = (control.tagName || "").toLowerCase();
+                const type = (control.getAttribute("type") || "").toLowerCase();
+
+                if (tag === "input" && (type === "checkbox" || type === "radio")) {
+                    control.checked = !!snapshot.checked;
+                } else if (typeof snapshot.value !== "undefined") {
+                    control.value = snapshot.value;
+                }
+            });
+
+            const detailNodes = target.querySelectorAll("details");
+            detailNodes.forEach(function (node, index) {
+                const key = "details::" + index;
+                if (Object.prototype.hasOwnProperty.call(state.details, key)) {
+                    node.open = !!state.details[key];
+                }
+            });
+
+            if (!state.focused) {
+                return;
+            }
+
+            const focusControl = Array.from(controls).find(function (candidate) {
+                return controlSignature(candidate, target) === state.focused;
+            });
+
+            if (!focusControl) {
+                return;
+            }
+
+            focusControl.focus({ preventScroll: true });
+            const focusSnapshot = state.controls[state.focused];
+            if (
+                focusSnapshot &&
+                typeof focusSnapshot.selectionStart === "number" &&
+                typeof focusSnapshot.selectionEnd === "number" &&
+                typeof focusControl.setSelectionRange === "function"
+            ) {
+                focusControl.setSelectionRange(focusSnapshot.selectionStart, focusSnapshot.selectionEnd);
+            }
+        }
+
+        let pendingDashboardStateHTML = "";
+        let hasPendingDashboardState = false;
+        let dashboardInteractionLockUntil = 0;
+        let dashboardRequestsInFlight = 0;
+        let pendingDashboardFlushTimer = 0;
+
+        function isWithinDashboardState(node) {
+            if (!node || typeof node.closest !== "function") {
+                return false;
+            }
+            return !!node.closest("#dashboard-state-target");
+        }
+
+        function lockDashboardInteraction(durationMs) {
+            const duration = Math.max(0, Number(durationMs) || 0);
+            const until = Date.now() + duration;
+            if (until > dashboardInteractionLockUntil) {
+                dashboardInteractionLockUntil = until;
+            }
+
+            if (hasPendingDashboardState) {
+                schedulePendingDashboardFlush(duration + 25);
+            }
+        }
+
+        function schedulePendingDashboardFlush(delayMs) {
+            if (pendingDashboardFlushTimer) {
+                window.clearTimeout(pendingDashboardFlushTimer);
+            }
+
+            const delay = Math.max(0, Number(delayMs) || 0);
+            pendingDashboardFlushTimer = window.setTimeout(function () {
+                pendingDashboardFlushTimer = 0;
+                flushPendingDashboardState();
+            }, delay);
+        }
+
+        function getActiveDashboardControl(target) {
+            if (!target) {
+                return null;
+            }
+
+            const active = document.activeElement;
+            if (!active || !target.contains(active)) {
+                return null;
+            }
+
+            const tag = (active.tagName || "").toLowerCase();
+            if (tag === "input" || tag === "select" || tag === "textarea" || !!active.isContentEditable) {
+                return active;
+            }
+
+            return null;
+        }
+
+        function hasInteractionLock() {
+            return Date.now() < dashboardInteractionLockUntil;
+        }
+
+        function shouldDeferDashboardRender(target) {
+            if (getActiveDashboardControl(target)) {
+                return true;
+            }
+            if (hasInteractionLock()) {
+                return true;
+            }
+            if (dashboardRequestsInFlight > 0) {
+                return true;
+            }
+            return false;
+        }
+
+        function applyDashboardStateHTML(target, html) {
+            const uiState = captureDashboardUIState(target);
 
             target.innerHTML = html;
 
@@ -859,6 +1076,46 @@
             }
 
             initializeArenaCreateForms(target);
+            restoreDashboardUIState(target, uiState);
+        }
+
+        function flushPendingDashboardState() {
+            if (!hasPendingDashboardState) {
+                return;
+            }
+
+            const target = document.getElementById("dashboard-state-target");
+            if (!target) {
+                return;
+            }
+
+            if (shouldDeferDashboardRender(target)) {
+                const waitMs = hasInteractionLock() ? Math.max(25, dashboardInteractionLockUntil - Date.now() + 10) : 50;
+                schedulePendingDashboardFlush(waitMs);
+                return;
+            }
+
+            const html = pendingDashboardStateHTML;
+            pendingDashboardStateHTML = "";
+            hasPendingDashboardState = false;
+            applyDashboardStateHTML(target, html);
+        }
+
+        function renderDashboardStateHTML(html) {
+            const target = document.getElementById("dashboard-state-target");
+            if (!target) {
+                return;
+            }
+
+            if (shouldDeferDashboardRender(target)) {
+                pendingDashboardStateHTML = html;
+                hasPendingDashboardState = true;
+                const waitMs = hasInteractionLock() ? Math.max(25, dashboardInteractionLockUntil - Date.now() + 10) : 50;
+                schedulePendingDashboardFlush(waitMs);
+                return;
+            }
+
+            applyDashboardStateHTML(target, html);
         }
 
         function streamQuery() {
@@ -1009,6 +1266,52 @@
 
             syncGameArgsField(form);
         });
+
+        document.addEventListener("pointerdown", function (event) {
+            if (!isWithinDashboardState(event.target)) {
+                return;
+            }
+            lockDashboardInteraction(450);
+        }, true);
+
+        document.body.addEventListener("submit", function (event) {
+            if (!isWithinDashboardState(event.target)) {
+                return;
+            }
+            lockDashboardInteraction(1000);
+        }, true);
+
+        document.body.addEventListener("htmx:beforeRequest", function (event) {
+            if (!isWithinDashboardState(event.target)) {
+                return;
+            }
+            dashboardRequestsInFlight += 1;
+            lockDashboardInteraction(1500);
+        });
+
+        document.body.addEventListener("htmx:afterRequest", function (event) {
+            if (!isWithinDashboardState(event.target)) {
+                return;
+            }
+            if (dashboardRequestsInFlight > 0) {
+                dashboardRequestsInFlight -= 1;
+            }
+            window.setTimeout(flushPendingDashboardState, 0);
+        });
+
+        document.body.addEventListener("htmx:responseError", function (event) {
+            if (!isWithinDashboardState(event.target)) {
+                return;
+            }
+            if (dashboardRequestsInFlight > 0) {
+                dashboardRequestsInFlight -= 1;
+            }
+            window.setTimeout(flushPendingDashboardState, 0);
+        });
+
+        document.addEventListener("focusout", function () {
+            window.setTimeout(flushPendingDashboardState, 0);
+        }, true);
 
         initializeArenaCreateForms(document);
         startDashboardStream();

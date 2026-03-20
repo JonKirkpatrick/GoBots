@@ -58,7 +58,9 @@ Primary references:
 \subsection{Bot Command Protocol (TCP)}
 A newline-delimited command protocol is exposed for bot clients. Core commands include registration, arena creation/joining, move submission, observation, and disconnect.
 
-Current protocol supports dynamic game arguments in \texttt{CREATE}, enabling consistent invocation for built-in and plugin games.
+All command responses use a single JSON envelope shape (\texttt{status}, \texttt{type}, \texttt{payload}) over JSONL, including greeting and lifecycle responses.
+
+Current protocol supports dynamic game arguments in \texttt{CREATE}, enabling consistent invocation across plugin games.
 
 Primary references:
 \begin{itemize}[leftmargin=*]
@@ -185,13 +187,6 @@ Implication: suitable for local/home-lab operation and experimentation, but not 
 
 Implication: deployment in untrusted networks requires external controls (for example TLS termination, network segmentation, host hardening).
 
-\subsection{Protocol Consistency}
-\begin{itemize}[leftmargin=*]
-  \item Protocol documentation notes that some legacy command paths still emit plain text rather than normalized JSON envelopes.
-\end{itemize}
-
-Implication: client implementations need defensive parsing in edge paths until response shape is fully unified.
-
 \subsection{Scalability and Concurrency Model}
 \begin{itemize}[leftmargin=*]
   \item Manager state synchronization is intentionally coarse-grained (central mutex over key maps/counters).
@@ -216,7 +211,6 @@ Implication: current confidence is build- and smoke-test-oriented, with limited 
 A pragmatic next phase that aligns with the current architecture would be:
 \begin{enumerate}[leftmargin=*]
   \item Persist core runtime records (profiles, matches, key arena events) to durable storage.
-  \item Normalize protocol outputs so all command responses consistently use one JSON envelope model.
   \item Introduce baseline automated tests for manager lifecycle, protocol handlers, and plugin host behavior.
   \item Add security hardening layers for production-like deployments (transport protection, token handling improvements, plugin controls).
   \item Expand plugin operational controls (health checks, richer diagnostics, controlled resource limits).
@@ -260,6 +254,6 @@ Build-a-Bot Stadium has progressed from a narrow game host into a fully plugin-d
   \item practical deployment and release pathways.
 \end{itemize}
 
-The core extension and operator workflows are now demonstrably in place. The most significant remaining work is concentrated in durability (persistent match archives), protocol cleanup (unified JSON responses), security hardening (transport protection, plugin governance), and automated regression coverage.
+The core extension and operator workflows are now demonstrably in place. The most significant remaining work is concentrated in durability (persistent match archives), security hardening (transport protection, plugin governance), and automated regression coverage.
 
 \end{document}

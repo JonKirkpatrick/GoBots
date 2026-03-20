@@ -1,6 +1,7 @@
 package stadium
 
 import (
+	"sync"
 	"time"
 
 	"github.com/JonKirkpatrick/bbs/games"
@@ -8,6 +9,7 @@ import (
 
 // Arena represents a single match instance, including players, observers, game state, and timing.
 type Arena struct {
+	mu                sync.Mutex         // Protects mutable fields of this arena
 	ID                int                // Unique identifier for the arena
 	Player1           *Session           // Session of Player 1 (can be nil if waiting for opponent)
 	Player2           *Session           // Session of Player 2 (can be nil if waiting for opponent)

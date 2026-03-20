@@ -8,13 +8,14 @@ import (
 
 func (m *Manager) RecordMove(arenaID int, actor *Session, move string, elapsed time.Duration) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	arena, exists := m.Arenas[arenaID]
+	m.mu.Unlock()
 	if !exists {
 		return errors.New("arena not found")
 	}
 
+	now := time.Now()
+	arena.mu.Lock()
 	rec := MatchMove{
 		Number:     len(arena.MoveHistory) + 1,
 		PlayerID:   actor.PlayerID,
@@ -23,20 +24,20 @@ func (m *Manager) RecordMove(arenaID int, actor *Session, move string, elapsed t
 		BotName:    actor.BotName,
 		Move:       move,
 		ElapsedMS:  elapsed.Milliseconds(),
-		OccurredAt: time.Now().UTC().Format(time.RFC3339Nano),
+		OccurredAt: now.UTC().Format(time.RFC3339Nano),
 	}
-
 	arena.MoveHistory = append(arena.MoveHistory, rec)
-	arena.LastMove = time.Now()
-	m.broadcastArenaListLocked()
+	arena.LastMove = now
+	arena.mu.Unlock()
+
+	m.PublishArenaList()
 	return nil
 }
 
 func (m *Manager) FinalizeArena(arenaID int, endReason string, winnerPlayerID int, isDraw bool) (MatchRecord, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	arena, exists := m.Arenas[arenaID]
+	m.mu.Unlock()
 	if !exists {
 		return MatchRecord{}, errors.New("arena not found")
 	}
@@ -46,7 +47,7 @@ func (m *Manager) FinalizeArena(arenaID int, endReason string, winnerPlayerID in
 		return MatchRecord{}, err
 	}
 
-	m.broadcastArenaListLocked()
+	m.PublishArenaList()
 	return record, nil
 }
 
@@ -55,19 +56,25 @@ func (m *Manager) finalizeArenaLocked(arena *Arena, endReason, terminalStatus st
 		return MatchRecord{}, errors.New("arena is nil")
 	}
 
+	now := time.Now()
+
+	arena.mu.Lock()
 	if arena.CompletedAt.IsZero() == false {
+		arena.mu.Unlock()
 		return MatchRecord{}, errors.New("arena already finalized")
 	}
 
-	now := time.Now()
 	arena.Status = terminalStatus
 	arena.CompletedAt = now
 	arena.LastMove = now
 	arena.WinnerPlayerID = winnerPlayerID
 	arena.IsDraw = isDraw
 
+	player1 := arena.Player1
+	player2 := arena.Player2
+	observers := append([]*Session(nil), arena.Observers...)
+
 	record := MatchRecord{
-		MatchID:        m.nextMatchID,
 		ArenaID:        arena.ID,
 		TerminalStatus: terminalStatus,
 		EndReason:      endReason,
@@ -76,14 +83,11 @@ func (m *Manager) finalizeArenaLocked(arena *Arena, endReason, terminalStatus st
 		GameArgs:       append([]string(nil), arena.GameArgs...),
 		StartedAt:      arena.CreatedAt.UTC().Format(time.RFC3339Nano),
 		EndedAt:        now.UTC().Format(time.RFC3339Nano),
-		Observers:      make([]ObserverSnapshot, 0, len(arena.Observers)),
+		Observers:      make([]ObserverSnapshot, 0, len(observers)),
 		Moves:          append([]MatchMove(nil), arena.MoveHistory...),
 	}
-	m.nextMatchID++
 
-	if arena.ActivatedAt.IsZero() {
-		record.StartedAt = arena.CreatedAt.UTC().Format(time.RFC3339Nano)
-	} else {
+	if !arena.ActivatedAt.IsZero() {
 		record.StartedAt = arena.ActivatedAt.UTC().Format(time.RFC3339Nano)
 	}
 
@@ -92,10 +96,10 @@ func (m *Manager) finalizeArenaLocked(arena *Arena, endReason, terminalStatus st
 		record.FinalGameState = arena.Game.GetState()
 	}
 
-	record.Player1 = participantFromSession(arena.Player1)
-	record.Player2 = participantFromSession(arena.Player2)
+	record.Player1 = participantFromSession(player1)
+	record.Player2 = participantFromSession(player2)
 
-	for _, observer := range arena.Observers {
+	for _, observer := range observers {
 		if observer == nil {
 			continue
 		}
@@ -105,62 +109,70 @@ func (m *Manager) finalizeArenaLocked(arena *Arena, endReason, terminalStatus st
 		})
 	}
 
-	record.MoveSequence = make([]string, 0, len(arena.MoveHistory))
-	for _, move := range arena.MoveHistory {
+	record.MoveSequence = make([]string, 0, len(record.Moves))
+	for _, move := range record.Moves {
 		record.MoveSequence = append(record.MoveSequence, move.Move)
 	}
 	record.MoveCount = len(record.MoveSequence)
 	record.CompactMoves = strings.Join(record.MoveSequence, ",")
 
-	winnerProfileID := ""
+	player1BotID := ""
+	player2BotID := ""
 	winnerName := ""
-	if winnerPlayerID == 1 && arena.Player1 != nil {
-		winnerProfileID = arena.Player1.BotID
-		winnerName = arena.Player1.BotName
+	if player1 != nil {
+		player1BotID = player1.BotID
 	}
-	if winnerPlayerID == 2 && arena.Player2 != nil {
-		winnerProfileID = arena.Player2.BotID
-		winnerName = arena.Player2.BotName
+	if player2 != nil {
+		player2BotID = player2.BotID
 	}
-	record.WinnerBotID = winnerProfileID
+	if winnerPlayerID == 1 && player1 != nil {
+		record.WinnerBotID = player1.BotID
+		winnerName = player1.BotName
+	}
+	if winnerPlayerID == 2 && player2 != nil {
+		record.WinnerBotID = player2.BotID
+		winnerName = player2.BotName
+	}
 	record.WinnerBotName = winnerName
 
-	m.applyOutcomeToProfilesLocked(arena, winnerPlayerID, isDraw)
-
-	m.MatchHistory = append(m.MatchHistory, record)
-
-	if arena.Player1 != nil {
-		arena.Player1.CurrentArena = nil
-		arena.Player1.PlayerID = 0
+	if player1 != nil {
+		player1.CurrentArena = nil
+		player1.PlayerID = 0
 	}
-	if arena.Player2 != nil {
-		arena.Player2.CurrentArena = nil
-		arena.Player2.PlayerID = 0
+	if player2 != nil {
+		player2.CurrentArena = nil
+		player2.PlayerID = 0
 	}
-	for _, observer := range arena.Observers {
+	for _, observer := range observers {
 		if observer != nil {
 			observer.CurrentArena = nil
 		}
 	}
 
-	// Null out arena's references to sessions so the watchdog's deferred
-	// terminateArena call cannot re-notify participants after we already have.
 	arena.Player1 = nil
 	arena.Player2 = nil
 	arena.Observers = nil
+	arena.mu.Unlock()
+
+	m.mu.Lock()
+	record.MatchID = m.nextMatchID
+	m.nextMatchID++
+	m.applyOutcomeToProfilesByBotIDsLocked(player1BotID, player2BotID, winnerPlayerID, isDraw)
+	m.MatchHistory = append(m.MatchHistory, record)
+	m.mu.Unlock()
 
 	return record, nil
 }
 
-func (m *Manager) applyOutcomeToProfilesLocked(arena *Arena, winnerPlayerID int, isDraw bool) {
+func (m *Manager) applyOutcomeToProfilesByBotIDsLocked(player1BotID, player2BotID string, winnerPlayerID int, isDraw bool) {
 	profiles := make([]*BotProfile, 0, 2)
-	if arena.Player1 != nil {
-		if p, ok := m.BotProfiles[arena.Player1.BotID]; ok {
+	if player1BotID != "" {
+		if p, ok := m.BotProfiles[player1BotID]; ok {
 			profiles = append(profiles, p)
 		}
 	}
-	if arena.Player2 != nil {
-		if p, ok := m.BotProfiles[arena.Player2.BotID]; ok {
+	if player2BotID != "" {
+		if p, ok := m.BotProfiles[player2BotID]; ok {
 			profiles = append(profiles, p)
 		}
 	}
@@ -175,27 +187,27 @@ func (m *Manager) applyOutcomeToProfilesLocked(arena *Arena, winnerPlayerID int,
 			profile.Draws++
 		}
 	} else {
-		if winnerPlayerID == 0 && arena.Player2 == nil && arena.Player1 != nil {
-			if p, ok := m.BotProfiles[arena.Player1.BotID]; ok {
+		if winnerPlayerID == 0 && player2BotID == "" && player1BotID != "" {
+			if p, ok := m.BotProfiles[player1BotID]; ok {
 				p.Losses++
 			}
 		}
-		if winnerPlayerID == 1 && arena.Player1 != nil {
-			if p, ok := m.BotProfiles[arena.Player1.BotID]; ok {
+		if winnerPlayerID == 1 && player1BotID != "" {
+			if p, ok := m.BotProfiles[player1BotID]; ok {
 				p.Wins++
 			}
-			if arena.Player2 != nil {
-				if p, ok := m.BotProfiles[arena.Player2.BotID]; ok {
+			if player2BotID != "" {
+				if p, ok := m.BotProfiles[player2BotID]; ok {
 					p.Losses++
 				}
 			}
 		}
-		if winnerPlayerID == 2 && arena.Player2 != nil {
-			if p, ok := m.BotProfiles[arena.Player2.BotID]; ok {
+		if winnerPlayerID == 2 && player2BotID != "" {
+			if p, ok := m.BotProfiles[player2BotID]; ok {
 				p.Wins++
 			}
-			if arena.Player1 != nil {
-				if p, ok := m.BotProfiles[arena.Player1.BotID]; ok {
+			if player1BotID != "" {
+				if p, ok := m.BotProfiles[player1BotID]; ok {
 					p.Losses++
 				}
 			}

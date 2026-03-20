@@ -12,7 +12,6 @@ import (
 // RegisterSession now captures the full profile of the bot upon entry.
 func (m *Manager) RegisterSession(s *Session, name, requestedBotID, providedSecret string, caps []string, ownerToken string) (RegistrationResult, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	var result RegistrationResult
 
 	now := time.Now()
@@ -105,7 +104,6 @@ func (m *Manager) RegisterSession(s *Session, name, requestedBotID, providedSecr
 	profile.RegistrationCount++
 
 	m.ActiveSessions[s.SessionID] = s
-	m.broadcastArenaListLocked()
 
 	result = RegistrationResult{
 		SessionID:      s.SessionID,
@@ -128,15 +126,18 @@ func (m *Manager) RegisterSession(s *Session, name, requestedBotID, providedSecr
 		result.BotSecret = profile.BotSecret
 	}
 
+	m.mu.Unlock()
+
 	return result, nil
 }
 
 // UnregisterSession removes a session from the manager's active sessions, typically called when a bot disconnects or quits.
 func (m *Manager) UnregisterSession(sessionID int) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	delete(m.ActiveSessions, sessionID)
-	m.broadcastArenaListLocked()
+	subscribers, events := m.prepareArenaListBroadcastLocked()
+	m.mu.Unlock()
+	m.publishEvents(subscribers, events)
 }
 
 // BotStatsForID returns the all-time W/L/D for a bot profile, used by the viewer.
@@ -156,6 +157,7 @@ func (m *Manager) EjectSession(sessionID int, reason string) error {
 		m.mu.Unlock()
 		return errors.New("session not found")
 	}
+	m.mu.Unlock()
 
 	if reason == "" {
 		reason = "Removed by dashboard admin"
@@ -163,9 +165,10 @@ func (m *Manager) EjectSession(sessionID int, reason string) error {
 
 	if sess.CurrentArena != nil {
 		arena := sess.CurrentArena
-		arena.NotifyAll("error", "Player "+sess.BotName+" was ejected: "+reason)
 		winnerPlayerID := 0
 		status := "aborted"
+
+		arena.mu.Lock()
 		if arena.Player1 == sess && arena.Player2 != nil {
 			winnerPlayerID = 2
 			status = "completed"
@@ -174,12 +177,16 @@ func (m *Manager) EjectSession(sessionID int, reason string) error {
 			winnerPlayerID = 1
 			status = "completed"
 		}
+		arena.mu.Unlock()
+
+		arena.NotifyAll("error", "Player "+sess.BotName+" was ejected: "+reason)
 		_, _ = m.finalizeArenaLocked(arena, "admin_eject", status, winnerPlayerID, false)
 	}
 
+	m.mu.Lock()
 	delete(m.ActiveSessions, sessionID)
-	m.broadcastArenaListLocked()
 	m.mu.Unlock()
+	m.PublishArenaList()
 
 	if sess.Conn != nil {
 		sess.SendJSON(Response{Status: "err", Type: "ejected", Payload: reason})
@@ -192,7 +199,6 @@ func (m *Manager) EjectSession(sessionID int, reason string) error {
 // UpdateSessionProfile allows a session to update its profile information, such as name or capabilities, while ensuring thread safety.
 func (m *Manager) UpdateSessionProfile(sess *Session, key, val string) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	switch key {
 	case "name":
@@ -200,6 +206,7 @@ func (m *Manager) UpdateSessionProfile(sess *Session, key, val string) error {
 	case "capability":
 		sess.Capabilities = append(sess.Capabilities, val)
 	default:
+		m.mu.Unlock()
 		return errors.New("unknown field")
 	}
 
@@ -208,7 +215,7 @@ func (m *Manager) UpdateSessionProfile(sess *Session, key, val string) error {
 		profile.LastSeenAt = time.Now()
 	}
 
-	m.broadcastArenaListLocked()
+	m.mu.Unlock()
 	return nil
 }
 

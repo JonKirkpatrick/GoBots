@@ -63,6 +63,7 @@ func (m *Manager) snapshotLocked() ManagerSnapshot {
 	})
 
 	for _, arena := range m.Arenas {
+		arena.mu.Lock()
 		arenaSnap := ArenaSnapshot{
 			ID:                arena.ID,
 			Status:            arena.Status,
@@ -119,6 +120,7 @@ func (m *Manager) snapshotLocked() ManagerSnapshot {
 			return arenaSnap.Observers[i].SessionID < arenaSnap.Observers[j].SessionID
 		})
 		arenaSnap.ObserverCount = len(arenaSnap.Observers)
+		arena.mu.Unlock()
 
 		snapshot.Arenas = append(snapshot.Arenas, arenaSnap)
 	}
