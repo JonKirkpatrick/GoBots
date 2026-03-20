@@ -58,7 +58,7 @@ cd cmd/bbs-server
 go run . --help
 ```
 
-For details on versioning and release management, see [VERSIONING.md](VERSIONING.md) and [CHANGELOG.md](CHANGELOG.md).
+For details on versioning and release management, see [VERSIONING.md](VERSIONING.md), [CHANGELOG.md](CHANGELOG.md), and [ROADMAP.md](ROADMAP.md).
 
 ## Run The Server
 
