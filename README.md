@@ -19,9 +19,46 @@ The runtime game catalog is sourced from process plugins loaded from manifests (
 
 The dashboard create-arena forms are populated directly from this live catalog, so new plugin games can appear without changing dashboard code.
 
-## Prerequisites
+## Installation
 
+### Option 1: Build from Source (Recommended for Development)
+
+**Prerequisites:**
 - Go `1.26.1` or newer
+
+**Build:**
+
+```bash
+git clone https://github.com/JonKirkpatrick/bbs.git
+cd bbs
+
+# Build all binaries
+make build
+
+# Or build selectively
+make build-server
+make build-agent
+```
+
+Binaries are placed in `/tmp/bbs-build/`.
+
+### Option 2: Use a Release Build
+
+Prebuilt binaries are available for Linux (amd64, arm64):
+
+1. Visit [GitHub Releases](https://github.com/JonKirkpatrick/bbs/releases)
+2. Download the latest version (e.g., `bbs-server-linux-amd64`)
+3. Make binary executable: `chmod +x bbs-server-linux-amd64`
+4. Run: `./bbs-server-linux-amd64`
+
+### Option 3: Run from Source
+
+```bash
+cd cmd/bbs-server
+go run . --help
+```
+
+For details on versioning and release management, see [VERSIONING.md](VERSIONING.md) and [CHANGELOG.md](CHANGELOG.md).
 
 ## Run The Server
 

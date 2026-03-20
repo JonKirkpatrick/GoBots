@@ -1,0 +1,121 @@
+# Changelog
+
+All notable changes to Build-a-Bot Stadium are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## Unreleased
+
+### Added
+- Enhanced error handling for template rendering failures
+- Improved dashboard state update reliability
+- Better handling of concurrent arena state changes
+
+### Changed
+- Dashboard state synchronization improvements
+- More robust player registration locking
+
+### Fixed
+- Deadlock conditions during concurrent bot registration
+- Stale state display issues in dashboard views
+
+## [v0.1.0] - 2026-03-19
+
+### Added
+- **Plugin-Only Architecture**: Removed all built-in games; now all games are provided as process plugins
+- **Gridworld RL Plugin**: New Python-based single-player environment with episodic support, configurable rewards, and replay support
+- **Enhanced Viewer**: Decoupled viewer rendering from server internals; plugins now provide custom JavaScript UI bundles
+- **Improved Documentation**: Added reference implementations for Go and Python plugins
+- **Q-Learning Bot Example**: New `python_gridworld_q_bot.py` demonstrating learning agent patterns
+
+### Changed
+- **Breaking**: Removed built-in Connect4, Chess, Checkers, and Gridworld games
+- **Breaking**: Removed server-side viewer rendering; all rendering is now client-side plugin code
+- Dashboard game discovery now scans manifest files from `cmd/bbs-server/plugins/games/`
+- Plugin manifest now requires `viewer_client_entry` field pointing to JavaScript bundle
+
+### Deprecated
+- Server-side viewer methods (`GetViewerSpec`, `GetViewerFrame`) replaced by client-side rendering
+
+### Fixed
+- Plugin loading timing and reliability
+- Dashboard state consistency during rapid game creation
+
+### Internal
+- Completely refactored games subsystem to use plugin host pattern
+- Improved plugin process lifecycle management
+- New `games/pluginapi/` shared protocol for process-based plugins
+
+## [v0.0.2] - 2026-03-19
+
+### Added
+- Environment variable export: `BBS_ENABLE_GAME_PLUGINS` now propagates to bot processes
+- Support for zero-player games (autonomous environments)
+
+### Changed
+- Plugin manifest discovery now handles version field correctly
+
+### Fixed
+- Plugin environment variable inheritance
+
+## [v0.0.1] - 2026-03-19
+
+### Added
+- Initial release of Build-a-Bot Stadium
+- **Core Platform**: TCP server and HTTP dashboard for managing bot arenas
+- **Game Support**:
+  - Connect4 (two-player)
+  - Gridworld (single-player environment)
+  - Checkers (two-player)
+  - Chess (two-player)
+- **Plugin System**: Early-stage process plugin support with Counter reference plugin
+- **Dashboard**: Web-based arena management and live viewer
+- **Agent Bridge**: `bbs-agent` local JSONL bridge for bot developers
+- **Deployment Scripts**: TrueNAS Docker and native deployment helpers
+
+### Features
+- TCP protocol for bot command/response
+- Dynamic session and arena management
+- Bot identity and ownership tokens
+- Move clock and handicap support
+- Match replay capability
+- Game argument schema in manifests
+
+---
+
+## Component Versions
+
+### bbs-agent
+
+- **v0.2.0**: Improved error handling and socket management
+- **v0.1.0**: Initial local bridge implementation with Unix socket support
+
+### bbs-game-counter-plugin
+
+- **v0.1.0**: Reference Go plugin implementation
+
+### bbs-plugin-manifest-lint
+
+- **v0.1.0**: Manifest validation tool
+
+---
+
+## Version Compatibility
+
+### Current Stable
+
+- **Repository**: v0.1.0 (plugin-only architecture)
+- **TCP Protocol**: Stable; new command types are additive
+- **Plugin RPC**: Protocol v1 (stable)
+- **Agent Contract**: v0.2 (pre-v1.0; breaking changes possible)
+
+### Upgrading
+
+- **v0.0.x → v0.1.0**: Requires rewriting game plugins to use new plugin-only manifest format
+- All components: No database migration needed (in-memory state)
+
+---
+
+## Release Strategy
+
+See [VERSIONING.md](VERSIONING.md) for detailed versioning and release process documentation.
