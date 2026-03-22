@@ -1,6 +1,6 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: bbs
-Upstream-Contact: Jon Kirkpatrick <jon@example.com>
+Upstream-Contact: Jon Kirkpatrick <jon.kirkpatrick@pm.me>
 Source: https://github.com/JonKirkpatrick/bbs
 
 Files: *
