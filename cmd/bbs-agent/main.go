@@ -76,6 +76,10 @@ type agent struct {
 
 	localListener   net.Listener
 	localSocketPath string
+	controlListener net.Listener
+	controlSocket   string
+	controlConn     net.Conn
+	controlMu       sync.Mutex
 
 	registerCh   chan serverMessage
 	serverErrCh  chan error
@@ -89,6 +93,17 @@ type agent struct {
 	joinedTimeMS   int
 	joinedMoveMS   int
 	turnStep       int
+
+	registeredBotID   string
+	issuedOwnerToken  string
+	dashboardHost     string
+	dashboardPort     string
+	dashboardEndpoint string
+
+	orchestrationMu     sync.Mutex
+	clientArmed         bool
+	armReason           string
+	armChangedAtRFC3339 string
 
 	lastStatePayload map[string]interface{}
 	pendingResponse  map[string]interface{}
@@ -112,6 +127,11 @@ func run() int {
 		return 1
 	}
 	defer ag.shutdown("agent_exit")
+
+	if err := ag.startControlListener(cfg.controlListen); err != nil {
+		fmt.Fprintf(os.Stderr, "[agent] failed to start control bridge: %v\n", err)
+		return 1
+	}
 
 	var creds credentials
 	hello, scanner, conn, err := ag.acceptLocalConnection(cfg.listen)
@@ -148,44 +168,46 @@ func run() int {
 	ag.botConn = conn
 	go ag.readBotScanner(scanner)
 
-	if err := ag.connectServer(); err != nil {
-		fmt.Fprintf(os.Stderr, "[agent] server connect failed: %v\n", err)
-		return 1
-	}
+	if strings.TrimSpace(cfg.server) != "" {
+		if err := ag.connectServer(); err != nil {
+			fmt.Fprintf(os.Stderr, "[agent] server connect failed: %v\n", err)
+			return 1
+		}
 
-	registerCommand := buildRegisterCommand(cfg.name, creds, cfg.capabilities, cfg.ownerToken)
-	fmt.Fprintf(os.Stderr, "[agent] sending REGISTER to %s\n", cfg.server)
-	if err := ag.sendServerCommand(registerCommand); err != nil {
-		fmt.Fprintf(os.Stderr, "[agent] failed to send register command: %v\n", err)
-		return 1
-	}
+		registerCommand := buildRegisterCommand(cfg.name, creds, cfg.capabilities, cfg.ownerToken)
+		fmt.Fprintf(os.Stderr, "[agent] sending REGISTER to %s\n", cfg.server)
+		if err := ag.sendServerCommand(registerCommand); err != nil {
+			fmt.Fprintf(os.Stderr, "[agent] failed to send register command: %v\n", err)
+			return 1
+		}
 
-	registerMsg, err := waitForRegister(ag.registerCh, cfg.registerTimeout)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "[agent] register failed: %v\n", err)
-		return 1
-	}
+		registerMsg, err := waitForRegister(ag.registerCh, cfg.registerTimeout)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[agent] register failed: %v\n", err)
+			return 1
+		}
 
-	if strings.ToLower(strings.TrimSpace(registerMsg.Status)) != "ok" {
-		fmt.Fprintf(os.Stderr, "[agent] register rejected: %v\n", registerMsg.Payload)
-		return 1
-	}
+		if strings.ToLower(strings.TrimSpace(registerMsg.Status)) != "ok" {
+			fmt.Fprintf(os.Stderr, "[agent] register rejected: %v\n", registerMsg.Payload)
+			return 1
+		}
 
-	registerPayload, _ := registerMsg.Payload.(map[string]interface{})
-	ag.sessionID = asInt(registerPayload["session_id"])
-	if registerPayload != nil {
-		botID := asString(registerPayload["bot_id"])
-		botSecret := asString(registerPayload["bot_secret"])
-		if botID != "" && botSecret != "" {
-			if err := saveCredentials(cfg.credentialsFile, credentials{BotID: botID, BotSecret: botSecret}); err != nil {
-				fmt.Fprintf(os.Stderr, "[agent] warning: failed to save credentials: %v\n", err)
-			} else {
-				fmt.Fprintf(os.Stderr, "[agent] saved credentials to %s\n", cfg.credentialsFile)
+		registerPayload, _ := registerMsg.Payload.(map[string]interface{})
+		botID, botSecret := ag.applyRegisterPayload(registerPayload)
+		if registerPayload != nil {
+			if botID != "" && botSecret != "" {
+				if err := saveCredentials(cfg.credentialsFile, credentials{BotID: botID, BotSecret: botSecret}); err != nil {
+					fmt.Fprintf(os.Stderr, "[agent] warning: failed to save credentials: %v\n", err)
+				} else {
+					fmt.Fprintf(os.Stderr, "[agent] saved credentials to %s\n", cfg.credentialsFile)
+				}
 			}
 		}
-	}
 
-	fmt.Fprintln(os.Stderr, "[agent] registered; waiting for JOIN to send bot welcome")
+		fmt.Fprintln(os.Stderr, "[agent] registered; waiting for JOIN to send bot welcome")
+	} else {
+		fmt.Fprintln(os.Stderr, "[agent] server endpoint not provided; running in local-only mode")
+	}
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
@@ -210,6 +232,7 @@ func run() int {
 type runtimeConfig struct {
 	server          string
 	listen          string
+	controlListen   string
 	name            string
 	ownerToken      string
 	capabilities    string
@@ -222,6 +245,7 @@ func parseFlags() (runtimeConfig, error) {
 
 	flag.StringVar(&cfg.server, "server", "", "BBS server endpoint in host:port format")
 	flag.StringVar(&cfg.listen, "listen", "", "local endpoint for bot bridge (linux/mac: unix:///tmp/bbs-agent.sock or /tmp/bbs-agent.sock)")
+	flag.StringVar(&cfg.controlListen, "control-listen", "", "local endpoint for optional control bridge (defaults to --listen with .control suffix)")
 	flag.StringVar(&cfg.name, "name", "agent_bot", "bot display name used during REGISTER")
 	flag.StringVar(&cfg.ownerToken, "owner-token", "", "optional owner token from dashboard")
 	flag.StringVar(&cfg.capabilities, "capabilities", "any", "comma-separated capability list")
@@ -230,12 +254,18 @@ func parseFlags() (runtimeConfig, error) {
 
 	flag.Parse()
 
-	if _, _, err := parseServerAddress(cfg.server); err != nil {
-		return cfg, err
+	if strings.TrimSpace(cfg.server) != "" {
+		if _, _, err := parseServerAddress(cfg.server); err != nil {
+			return cfg, err
+		}
 	}
 	cfg.listen = strings.TrimSpace(cfg.listen)
 	if cfg.listen == "" {
 		return cfg, errors.New("--listen is required")
+	}
+	cfg.controlListen = strings.TrimSpace(cfg.controlListen)
+	if cfg.controlListen == "" {
+		cfg.controlListen = defaultControlEndpoint(cfg.listen)
 	}
 	if strings.Contains(cfg.name, " ") {
 		return cfg, errors.New("--name cannot contain spaces")
@@ -300,6 +330,264 @@ func (a *agent) acceptLocalConnection(rawEndpoint string) (localHello, *bufio.Sc
 
 	fmt.Fprintf(os.Stderr, "[agent] local bot connected; name=%s capabilities=%s\n", hello.Name, hello.CapabilitiesCSV)
 	return hello, scanner, conn, nil
+}
+
+func (a *agent) startControlListener(rawEndpoint string) error {
+	network, address, display, err := parseLocalEndpoint(rawEndpoint)
+	if err != nil {
+		return err
+	}
+
+	if network == "unix" {
+		_ = os.Remove(address)
+		a.controlSocket = address
+	}
+
+	listener, err := net.Listen(network, address)
+	if err != nil {
+		return err
+	}
+	a.controlListener = listener
+
+	fmt.Fprintf(os.Stderr, "[agent] control bridge listening on %s\n", display)
+	go a.acceptControlConnections()
+	return nil
+}
+
+func (a *agent) acceptControlConnections() {
+	for {
+		conn, err := a.controlListener.Accept()
+		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
+			fmt.Fprintf(os.Stderr, "[agent] control accept failed: %v\n", err)
+			return
+		}
+
+		a.controlMu.Lock()
+		if a.controlConn != nil {
+			_ = a.controlConn.Close()
+		}
+		a.controlConn = conn
+		a.controlMu.Unlock()
+
+		_ = a.sendControl(contractMessage{
+			V:    contractVersion,
+			Type: "control_hello",
+			Payload: map[string]interface{}{
+				"agent_name":          "bbs-agent",
+				"agent_version":       agentVersion,
+				"server":              a.server,
+				"server_connected":    a.conn != nil,
+				"local_bot_connected": a.botConn != nil,
+			},
+		})
+
+		go a.readControl(conn)
+	}
+}
+
+func (a *agent) readControl(conn net.Conn) {
+	scanner := bufio.NewScanner(conn)
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, maxScannerToken)
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		a.handleControlLine(line)
+	}
+
+	a.controlMu.Lock()
+	if a.controlConn == conn {
+		a.controlConn = nil
+	}
+	a.controlMu.Unlock()
+}
+
+func (a *agent) handleControlLine(line string) {
+	var env botEnvelope
+	if err := json.Unmarshal([]byte(line), &env); err != nil {
+		_ = a.sendControl(contractMessage{
+			V:    contractVersion,
+			Type: "control_error",
+			Payload: map[string]interface{}{
+				"error": "invalid_json",
+			},
+		})
+		return
+	}
+
+	if env.V != contractVersion {
+		a.sendControlReply(env.ID, "control_error", map[string]interface{}{
+			"error": "unsupported_version",
+		})
+		return
+	}
+
+	switch strings.ToLower(strings.TrimSpace(env.Type)) {
+	case "ping":
+		a.sendControlReply(env.ID, "pong", map[string]interface{}{"ok": true})
+	case "status":
+		a.sendControlReply(env.ID, "status", map[string]interface{}{
+			"name":             a.name,
+			"server":           a.server,
+			"server_connected": a.conn != nil,
+			"session_id":       a.sessionID,
+			"bot_id":           a.registeredBotID,
+			"arena_id":         a.joinedArenaID,
+			"player_id":        a.joinedPlayerID,
+			"awaiting_action":  a.awaitingAction.Load(),
+		})
+	case "server_access":
+		a.sendControlReply(env.ID, "server_access", map[string]interface{}{
+			"server":             a.server,
+			"server_connected":   a.conn != nil,
+			"session_id":         a.sessionID,
+			"bot_id":             a.registeredBotID,
+			"owner_token":        a.issuedOwnerToken,
+			"dashboard_host":     a.dashboardHost,
+			"dashboard_port":     a.dashboardPort,
+			"dashboard_endpoint": a.dashboardEndpoint,
+		})
+	case "arm":
+		reason := "client_requested"
+		if len(env.Payload) > 0 {
+			var payload map[string]interface{}
+			if err := json.Unmarshal(env.Payload, &payload); err == nil {
+				if parsed := strings.TrimSpace(asString(payload["reason"])); parsed != "" {
+					reason = parsed
+				}
+			}
+		}
+
+		armed, changedAt := a.setClientArmed(true, reason)
+		a.sendControlReply(env.ID, "arm_ack", map[string]interface{}{
+			"armed":      armed,
+			"reason":     reason,
+			"changed_at": changedAt,
+		})
+	case "disarm":
+		reason := "client_requested"
+		if len(env.Payload) > 0 {
+			var payload map[string]interface{}
+			if err := json.Unmarshal(env.Payload, &payload); err == nil {
+				if parsed := strings.TrimSpace(asString(payload["reason"])); parsed != "" {
+					reason = parsed
+				}
+			}
+		}
+
+		armed, changedAt := a.setClientArmed(false, reason)
+		a.sendControlReply(env.ID, "disarm_ack", map[string]interface{}{
+			"armed":      armed,
+			"reason":     reason,
+			"changed_at": changedAt,
+		})
+	case "lifecycle":
+		armed, reason, changedAt := a.lifecycleSnapshot()
+		a.sendControlReply(env.ID, "lifecycle", map[string]interface{}{
+			"armed":      armed,
+			"reason":     reason,
+			"changed_at": changedAt,
+		})
+	case "server_command":
+		a.sendControlReply(env.ID, "control_error", map[string]interface{}{
+			"error":   "forbidden_type",
+			"type":    env.Type,
+			"message": "server command passthrough is intentionally unsupported on control socket",
+		})
+	case "quit":
+		reason := "control_quit"
+		if len(env.Payload) > 0 {
+			var payload map[string]interface{}
+			if err := json.Unmarshal(env.Payload, &payload); err == nil {
+				if parsed := strings.TrimSpace(asString(payload["reason"])); parsed != "" {
+					reason = parsed
+				}
+			}
+		}
+
+		a.sendControlReply(env.ID, "quit_ack", map[string]interface{}{
+			"ok":     true,
+			"reason": reason,
+		})
+
+		a.cancel()
+		if a.botConn != nil {
+			_ = a.botConn.Close()
+		}
+		if a.conn != nil {
+			_ = a.conn.Close()
+		}
+	default:
+		a.sendControlReply(env.ID, "control_error", map[string]interface{}{
+			"error": "unsupported_type",
+			"type":  env.Type,
+		})
+	}
+}
+
+func (a *agent) sendControlReply(requestID string, messageType string, payload interface{}) {
+	msg := contractMessage{V: contractVersion, Type: messageType, Payload: payload}
+	if strings.TrimSpace(requestID) != "" {
+		msg.ID = strings.TrimSpace(requestID)
+	}
+	_ = a.sendControl(msg)
+}
+
+func (a *agent) setClientArmed(armed bool, reason string) (bool, string) {
+	a.orchestrationMu.Lock()
+	defer a.orchestrationMu.Unlock()
+
+	a.clientArmed = armed
+	a.armReason = strings.TrimSpace(reason)
+	a.armChangedAtRFC3339 = time.Now().UTC().Format(time.RFC3339Nano)
+	return a.clientArmed, a.armChangedAtRFC3339
+}
+
+func (a *agent) lifecycleSnapshot() (bool, string, string) {
+	a.orchestrationMu.Lock()
+	defer a.orchestrationMu.Unlock()
+	return a.clientArmed, a.armReason, a.armChangedAtRFC3339
+}
+
+func (a *agent) applyRegisterPayload(registerPayload map[string]interface{}) (string, string) {
+	a.sessionID = asInt(registerPayload["session_id"])
+	if registerPayload == nil {
+		return "", ""
+	}
+
+	botID := asString(registerPayload["bot_id"])
+	botSecret := asString(registerPayload["bot_secret"])
+	a.registeredBotID = botID
+	token := asString(registerPayload["owner_token"])
+	if token != "" {
+		a.issuedOwnerToken = token
+	}
+	a.dashboardHost = asString(registerPayload["dashboard_host"])
+	a.dashboardPort = asString(registerPayload["dashboard_port"])
+	a.dashboardEndpoint = asString(registerPayload["dashboard_endpoint"])
+	return botID, botSecret
+}
+
+func (a *agent) sendControl(msg contractMessage) error {
+	payload, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+
+	a.controlMu.Lock()
+	defer a.controlMu.Unlock()
+
+	if a.controlConn == nil {
+		return errors.New("control client is not connected")
+	}
+	_, err = a.controlConn.Write(append(payload, '\n'))
+	return err
 }
 
 func parseLocalEndpoint(raw string) (network string, address string, display string, err error) {
@@ -701,6 +989,9 @@ func (a *agent) sendBot(msg contractMessage) error {
 }
 
 func (a *agent) sendServerCommand(command string) error {
+	if strings.TrimSpace(a.server) == "" {
+		return nil
+	}
 	if a.conn == nil {
 		return errors.New("server connection is not established")
 	}
@@ -735,12 +1026,42 @@ func (a *agent) shutdown(reason string) {
 	if a.localListener != nil {
 		_ = a.localListener.Close()
 	}
+	if a.controlListener != nil {
+		_ = a.controlListener.Close()
+	}
 	if a.botConn != nil {
 		_ = a.botConn.Close()
 	}
+	a.controlMu.Lock()
+	if a.controlConn != nil {
+		_ = a.controlConn.Close()
+	}
+	a.controlMu.Unlock()
 	if strings.TrimSpace(a.localSocketPath) != "" {
 		_ = os.Remove(a.localSocketPath)
 	}
+	if strings.TrimSpace(a.controlSocket) != "" {
+		_ = os.Remove(a.controlSocket)
+	}
+}
+
+func defaultControlEndpoint(listenEndpoint string) string {
+	network, address, _, err := parseLocalEndpoint(listenEndpoint)
+	if err != nil {
+		trimmed := strings.TrimSpace(listenEndpoint)
+		if strings.HasPrefix(trimmed, "unix://") {
+			return trimmed + ".control"
+		}
+		if trimmed == "" {
+			return "unix:///tmp/bbs-agent-control.sock"
+		}
+		return "unix://" + trimmed + ".control"
+	}
+
+	if network != "unix" {
+		return "unix:///tmp/bbs-agent-control.sock"
+	}
+	return "unix://" + address + ".control"
 }
 
 func parseServerAddress(raw string) (string, int, error) {

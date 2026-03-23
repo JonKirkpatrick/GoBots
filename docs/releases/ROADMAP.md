@@ -10,7 +10,7 @@ Build-a-Bot Stadium should be a practical platform for running bots in process-p
 
 Near-term work focuses on:
 
-- an alpha desktop client for local bot/agent operations
+- an alpha desktop client for bot-centric orchestration and server discovery/interaction
 - persistent server-side storage with SQLite
 - meaningful unit test coverage for core components
 
@@ -32,22 +32,90 @@ Near-term work focuses on:
 ## Release Track A: Desktop Client (Alpha)
 
 Goal:
-- Introduce a local desktop client focused on managing client-side bot operations.
+- Introduce a local desktop client that manages bots as first-class entities and orchestrates agent+bot runtime transparently.
 
 Scope:
-- Launch, monitor, and stop `bbs-agent` processes.
-- Show per-agent status (running, connected, idle/busy).
-- Show live communication/log feed for each tracked agent.
-- Allow guarded manual command injection for safe commands (`JOIN`, `LEAVE`, `QUIT`) when appropriate.
+- Establish a persistent client identity on first launch (local ID now, global/federated ID-compatible model).
+- Introduce persistent local storage for client state (SQLite preferred default; lightweight fallback optional only if SQLite proves unnecessary).
+- Launch directly into a unified workspace view (no top-level mode switching).
+- Include a collapsible left panel for bots and a collapsible right panel for servers.
+- Use the center activity area as a context-driven workspace that loads bot/server-specific flows.
+- Bot panel scope:
+	- render one card per registered bot,
+	- include entry point to register a new bot,
+	- show glanceable status glow states on cards (amber=armed, green=active session, red=error).
+- Server panel scope:
+	- render one card per known server,
+	- probe cached servers on startup to refresh availability,
+	- show glanceable server status (green=live, grey=inactive/offline).
+- Center activity scope:
+	- load bot registration and bot metadata/editor flows,
+	- load server detail views when a server is selected,
+	- expose owner-token-gated commands for active sessions on selected server (for example create/join arena actions).
 
 Definition of done:
-- User can create at least one agent profile and start/stop it from the GUI.
-- Client displays real-time status and logs for active agents.
-- Manual commands can be sent and are visibly logged with success/failure response.
-- Alpha build instructions documented for Linux.
+- First launch initializes durable client identity and persistent storage automatically.
+- User can register at least one bot profile and arm/disarm it from the GUI, with agent lifecycle handled by the client.
+- Armed bot flow can retrieve server access metadata through the agent control channel (owner token + dashboard endpoint).
+- Known server records persist across restarts, including cached plugin catalog snapshots.
+- Unified single-view layout is functional with collapsible bot/server side panels and context-driven center workspace.
+- Bot and server cards expose the planned alpha status indicators (bot: amber/green/red, server: green/grey).
+- Startup server probing updates known server availability state in the UI.
+- Selecting bot/server cards loads appropriate context views in the center activity area.
+- Active-session server views can surface owner-token-gated actions in the center workspace.
+- Alpha build/run instructions documented for Linux desktop environment.
 
 Likely follow-on:
-- Launch bots from client profiles and bind to selected agent endpoint.
+- Per-bot global identity strategy, cross-server credential lifecycle policies, and richer federated server resolution behavior.
+
+Implementation slices (Track A alpha):
+
+Execution checklist reference:
+- `docs/releases/TRACK_A_TASK_CHECKLIST.md`
+
+Slice A0: Foundation and project skeleton
+- Create Avalonia solution skeleton, baseline MVVM structure, and app shell.
+- Define core client domain models (`ClientIdentity`, `BotProfile`, `KnownServer`, `ServerPluginCache`, `AgentRuntimeState`).
+- Add lightweight telemetry/logging abstraction for local diagnostics.
+- Checkpoint outcome: app launches to shell, no persistence yet, architecture and model contracts established.
+
+Slice A1: Persistence and first-launch identity
+- Introduce storage layer with SQLite as default implementation.
+- Implement first-launch initialization flow for durable client identity.
+- Add schema versioning and startup migration path for client DB.
+- Checkpoint outcome: identity and empty collections persist across restarts.
+
+Slice A2: Unified layout and panel infrastructure
+- Build unified workspace UI with collapsible left bot panel and right server panel.
+- Implement center activity host and navigation/context routing model.
+- Add card components for bot/server lists with status rendering hooks.
+- Checkpoint outcome: static panel interactions work and center area swaps context views.
+
+Slice A3: Bot registration and orchestration wiring
+- Implement bot registration/edit form in center activity area.
+- Persist bot metadata including launch path and args.
+- Implement arm/disarm orchestration path that launches/monitors agent+bot transparently.
+- Map orchestration status to bot card glow states (amber/green/red).
+- Checkpoint outcome: at least one bot can be registered, armed, disarmed, and status-reflected in UI.
+
+Slice A4: Known server management and probing
+- Implement known server registration/edit workflow and persistence.
+- Add startup/server-list probe cycle for cached endpoints.
+- Cache server metadata and plugin catalog snapshots on successful contact.
+- Render server card status (green/grey) from probe state.
+- Checkpoint outcome: server list is persistent and availability updates at boot and refresh.
+
+Slice A5: Context server view and owner-token actions (alpha)
+- Implement server detail view in center activity area.
+- Wire agent control channel retrieval of server access metadata (`owner_token`, dashboard endpoint).
+- Expose first owner-token-gated action stubs/flows (for example create/join arena command paths).
+- Checkpoint outcome: selected active server view can show gated controls for an armed bot session.
+
+Slice A6: Hardening and alpha packaging
+- Add integration tests for orchestration and storage initialization paths.
+- Add guardrails for process lifecycle errors and stale connection states.
+- Finalize Linux build/run packaging notes and developer setup documentation.
+- Checkpoint outcome: alpha path is documented, repeatable, and stable enough for internal usage.
 
 ## Release Track B: Server Persistence (SQLite)
 

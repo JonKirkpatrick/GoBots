@@ -97,6 +97,27 @@ func TestParseLocalEndpoint_Invalid(t *testing.T) {
 	}
 }
 
+func TestDefaultControlEndpoint(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "bare path", in: "/tmp/bbs-agent.sock", want: "unix:///tmp/bbs-agent.sock.control"},
+		{name: "unix scheme", in: "unix:///tmp/bbs-agent.sock", want: "unix:///tmp/bbs-agent.sock.control"},
+		{name: "empty", in: "", want: "unix:///tmp/bbs-agent-control.sock"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := defaultControlEndpoint(tc.in)
+			if got != tc.want {
+				t.Fatalf("defaultControlEndpoint(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestParseLocalHello_Valid(t *testing.T) {
 	line := `{"v":"0.2","type":"hello","payload":{"name":"bot_one","owner_token":"owner_1","capabilities":["a"," b "],"credentials_file":"/tmp/creds.txt","bot_id":"bot_123","bot_secret":"sec_123"}}`
 

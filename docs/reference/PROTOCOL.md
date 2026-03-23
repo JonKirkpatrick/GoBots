@@ -79,6 +79,13 @@ All server responses (including command replies and connection greeting) use one
 - New bots send `""` for both to request issuance.
 - `owner_token=<token>` links session to dashboard owner controls.
 
+On successful `REGISTER`, payload includes server-issued access metadata:
+
+- `owner_token`: owner credential linked to the active session (issued when omitted by client)
+- `dashboard_host`: host the dashboard is reachable on for this server
+- `dashboard_port`: dashboard HTTP port
+- `dashboard_endpoint`: `host:port` convenience field
+
 Owner token linkage is single-session: one active bot can claim a given token at a time.
 
 ## Timing, Handicap, And Policies

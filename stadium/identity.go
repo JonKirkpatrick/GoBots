@@ -4,17 +4,21 @@ import "time"
 
 // RegistrationResult is returned after a bot registers with the stadium.
 type RegistrationResult struct {
-	SessionID      int    `json:"session_id"`
-	BotID          string `json:"bot_id"`
-	BotSecret      string `json:"bot_secret,omitempty"`
-	IsNewIdentity  bool   `json:"is_new_identity"`
-	Name           string `json:"name"`
-	GamesPlayed    int    `json:"games_played"`
-	Wins           int    `json:"wins"`
-	Losses         int    `json:"losses"`
-	Draws          int    `json:"draws"`
-	RegisteredAt   string `json:"registered_at"`
-	Authentication string `json:"authentication"`
+	SessionID         int    `json:"session_id"`
+	BotID             string `json:"bot_id"`
+	BotSecret         string `json:"bot_secret,omitempty"`
+	OwnerToken        string `json:"owner_token,omitempty"`
+	DashboardHost     string `json:"dashboard_host,omitempty"`
+	DashboardPort     string `json:"dashboard_port,omitempty"`
+	DashboardEndpoint string `json:"dashboard_endpoint,omitempty"`
+	IsNewIdentity     bool   `json:"is_new_identity"`
+	Name              string `json:"name"`
+	GamesPlayed       int    `json:"games_played"`
+	Wins              int    `json:"wins"`
+	Losses            int    `json:"losses"`
+	Draws             int    `json:"draws"`
+	RegisteredAt      string `json:"registered_at"`
+	Authentication    string `json:"authentication"`
 }
 
 // BotProfile stores a bot's persistent identity and long-lived stats.

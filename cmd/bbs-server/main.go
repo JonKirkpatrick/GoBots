@@ -236,12 +236,26 @@ func handleBot(conn net.Conn) {
 			}
 
 			caps, ownerToken := parseRegisterOptions(parts[4:])
+			if strings.TrimSpace(ownerToken) == "" {
+				issuedOwnerToken, tokenErr := stadium.NewOwnerToken()
+				if tokenErr != nil {
+					sess.SendJSON(stadium.Response{Status: "err", Type: "auth", Payload: "Failed to issue owner token"})
+					continue
+				}
+				ownerToken = issuedOwnerToken
+			}
 
 			result, err := stadium.DefaultManager.RegisterSession(sess, parts[1], parts[2], parts[3], caps, ownerToken)
 			if err != nil {
 				sess.SendJSON(stadium.Response{Status: "err", Type: "auth", Payload: err.Error()})
 				continue
 			}
+
+			dashboardHost := dashboardHostForSession(sess)
+			result.OwnerToken = sess.OwnerToken
+			result.DashboardHost = dashboardHost
+			result.DashboardPort = dashboardServerPort
+			result.DashboardEndpoint = net.JoinHostPort(dashboardHost, dashboardServerPort)
 
 			sess.SendJSON(stadium.Response{Status: "ok", Type: "register", Payload: result})
 			stadium.DefaultManager.PublishArenaList()
@@ -513,4 +527,27 @@ func compactGameoverPayload(record stadium.MatchRecord) map[string]interface{} {
 		"started_at":       record.StartedAt,
 		"ended_at":         record.EndedAt,
 	}
+}
+
+func dashboardHostForSession(sess *stadium.Session) string {
+	if sess == nil || sess.Conn == nil {
+		return "localhost"
+	}
+
+	raw := strings.TrimSpace(sess.Conn.LocalAddr().String())
+	if raw == "" {
+		return "localhost"
+	}
+
+	host, _, err := net.SplitHostPort(raw)
+	if err != nil {
+		host = raw
+	}
+	host = strings.TrimSpace(host)
+	host = strings.Trim(host, "[]")
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		return "localhost"
+	}
+
+	return host
 }

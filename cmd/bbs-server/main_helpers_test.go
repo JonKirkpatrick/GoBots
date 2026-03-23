@@ -1,8 +1,10 @@
 package main
 
 import (
+	"net"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/JonKirkpatrick/bbs/stadium"
 )
@@ -155,4 +157,46 @@ func TestCompactGameoverPayload_FieldsPresent(t *testing.T) {
 	if got := payload["move_count"]; got != 12 {
 		t.Fatalf("move_count = %#v, want %d", got, 12)
 	}
+}
+
+type testLocalAddrConn struct {
+	local net.Addr
+}
+
+func (c *testLocalAddrConn) Read(_ []byte) (int, error)         { return 0, nil }
+func (c *testLocalAddrConn) Write(b []byte) (int, error)        { return len(b), nil }
+func (c *testLocalAddrConn) Close() error                       { return nil }
+func (c *testLocalAddrConn) LocalAddr() net.Addr                { return c.local }
+func (c *testLocalAddrConn) RemoteAddr() net.Addr               { return &net.TCPAddr{} }
+func (c *testLocalAddrConn) SetDeadline(_ time.Time) error      { return nil }
+func (c *testLocalAddrConn) SetReadDeadline(_ time.Time) error  { return nil }
+func (c *testLocalAddrConn) SetWriteDeadline(_ time.Time) error { return nil }
+
+func TestDashboardHostForSession(t *testing.T) {
+	t.Run("nil session", func(t *testing.T) {
+		if got := dashboardHostForSession(nil); got != "localhost" {
+			t.Fatalf("dashboardHostForSession(nil) = %q, want localhost", got)
+		}
+	})
+
+	t.Run("unspecified ipv4", func(t *testing.T) {
+		s := &stadium.Session{Conn: &testLocalAddrConn{local: &net.TCPAddr{IP: net.IPv4zero, Port: 8080}}}
+		if got := dashboardHostForSession(s); got != "localhost" {
+			t.Fatalf("dashboardHostForSession(0.0.0.0) = %q, want localhost", got)
+		}
+	})
+
+	t.Run("unspecified ipv6", func(t *testing.T) {
+		s := &stadium.Session{Conn: &testLocalAddrConn{local: &net.TCPAddr{IP: net.IPv6unspecified, Port: 8080}}}
+		if got := dashboardHostForSession(s); got != "localhost" {
+			t.Fatalf("dashboardHostForSession(::) = %q, want localhost", got)
+		}
+	})
+
+	t.Run("concrete host", func(t *testing.T) {
+		s := &stadium.Session{Conn: &testLocalAddrConn{local: &net.TCPAddr{IP: net.ParseIP("10.1.2.3"), Port: 8080}}}
+		if got := dashboardHostForSession(s); got != "10.1.2.3" {
+			t.Fatalf("dashboardHostForSession(10.1.2.3) = %q, want 10.1.2.3", got)
+		}
+	})
 }
